@@ -1,6 +1,10 @@
 # dependencies — the only one is fake-indexeddb, restored with `npm install`
 node_modules/
 
+# exported data — the History tab downloads these into whatever folder the
+# browser is pointed at, and this repo is public. Never commit one.
+tracker-export-*.json
+
 # local browser profiles and scratch output from driving the app
 chrome-profile*/
 chrome-sw/

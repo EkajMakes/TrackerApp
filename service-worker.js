@@ -18,7 +18,7 @@
  * a stale shell is otherwise served forever, because cache-first never asks.
  * ---------------------------------------------------------------------------
  */
-const CACHE_VERSION = 5;
+const CACHE_VERSION = 6;
 
 const SHELL_CACHE = `tracker-shell-v${CACHE_VERSION}`;
 const CONFIG_CACHE = `tracker-config-v${CACHE_VERSION}`;

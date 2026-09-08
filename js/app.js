@@ -8,6 +8,7 @@
  */
 
 import { loadConfig } from './config.js';
+import { DB_NAME } from './db.js';
 import {
   completeTaskAction,
   exportTracker,
@@ -113,6 +114,76 @@ function askPool(task) {
   });
 }
 
+/**
+ * The wipe confirmation. Names what is about to be destroyed, offers the export
+ * first, and needs a second deliberate tap on the destructive button — a fat
+ * finger on the History tab must not be able to erase a month.
+ */
+function confirmReset(summary) {
+  return new Promise((resolve) => {
+    els.sheetTitle.textContent = 'Erase everything?';
+
+    const facts = document.createElement('div');
+    facts.className = 'reset-facts';
+    const lines = [
+      [`${summary.live}`, `completion${summary.live === 1 ? '' : 's'}`],
+      [`${summary.failures}`, `failure${summary.failures === 1 ? '' : 's'}`],
+      [`${summary.balance}`, 'points'],
+      [`${summary.streak}`, 'day streak'],
+    ];
+    for (const [value, label] of lines) {
+      const cell = document.createElement('div');
+      cell.className = 'reset-fact';
+      const v = document.createElement('span');
+      v.className = 'reset-fact-v';
+      v.textContent = value;
+      const k = document.createElement('span');
+      k.className = 'reset-fact-k';
+      k.textContent = label;
+      cell.append(v, k);
+      facts.append(cell);
+    }
+
+    const range = document.createElement('p');
+    range.className = 'prose';
+    range.textContent = summary.through
+      ? `Recorded ${summary.since} to ${summary.through}. All of it goes, permanently.`
+      : 'There is nothing recorded yet.';
+
+    const backup = document.createElement('button');
+    backup.className = 'btn';
+    backup.type = 'button';
+    backup.textContent = 'Export a backup first';
+    backup.addEventListener('click', () => actions.exportData());
+
+    const erase = document.createElement('button');
+    erase.className = 'btn btn-danger';
+    erase.type = 'button';
+    erase.textContent = 'Erase everything';
+    let armed = false;
+    erase.addEventListener('click', () => {
+      if (!armed) {
+        armed = true;
+        erase.textContent = 'Tap again to erase — no undo';
+        erase.classList.add('is-armed');
+        // Disarm if they hesitate, so the second tap is always deliberate.
+        setTimeout(() => {
+          armed = false;
+          erase.textContent = 'Erase everything';
+          erase.classList.remove('is-armed');
+        }, 4000);
+        return;
+      }
+      closeSheet();
+      resolve(true);
+    });
+
+    els.sheetBody.replaceChildren(facts, range, backup, erase);
+    els.sheet.hidden = false;
+    els.sheet._cancel = () => resolve(false);
+  });
+}
+
 /* ---------------- rendering ---------------- */
 
 function paint(view) {
@@ -205,6 +276,32 @@ const actions = {
     }
     toast(`${item.name} redeemed · −${item.cost}`);
     paint(viewOf(res.world, cfg, now()));
+  },
+
+  /**
+   * Start over: drop the whole database and re-seed.
+   *
+   * This deletes the DATABASE, not records — there is still no delete path in
+   * db.js, and nothing the app does in normal operation removes a row. The one
+   * destructive act lives here, at the call site, behind a named confirmation.
+   */
+  async resetAll(summary) {
+    if (!(await confirmReset(summary))) return;
+
+    db.close();
+    await new Promise((resolve, reject) => {
+      const req = indexedDB.deleteDatabase(DB_NAME);
+      req.onsuccess = resolve;
+      req.onerror = () => reject(req.error ?? new Error('the database refused to delete'));
+      // Another tab holding it open would block us; nothing else should.
+      req.onblocked = resolve;
+    });
+
+    const opened = await openTracker(indexedDB, cfg, now());
+    db = opened.db;
+    tab = 'today';
+    selectTab('today');
+    toast('Everything erased — starting fresh');
   },
 
   async exportData() {

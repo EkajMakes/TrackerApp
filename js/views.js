@@ -296,7 +296,20 @@ export function historyView(world, nowMs, cfg) {
     .sort((a, b) => b.resolvedAt - a.resolvedAt)
     .map((f) => ({ ...f, dateLabel: shortDate(f.incurredAppDate) }));
 
-  return { weeks, weight, balance, redemptions, resolvedFailures };
+  // What a wipe would destroy, in the terms the confirmation speaks in.
+  const liveOnly = world.completions.filter(isLive);
+  const reset = {
+    completions: world.completions.length,
+    live: liveOnly.length,
+    failures: world.failures.length,
+    redemptions: world.redemptions.length,
+    balance: world.state.balance,
+    streak: world.state.currentStreak,
+    since: liveOnly.reduce((first, c) => (!first || c.appDate < first ? c.appDate : first), null),
+    through: liveOnly.reduce((last, c) => (!last || c.appDate > last ? c.appDate : last), null),
+  };
+
+  return { weeks, weight, balance, redemptions, resolvedFailures, reset };
 }
 
 /* ------------------------------------------------------------------ *

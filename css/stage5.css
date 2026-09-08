@@ -245,3 +245,38 @@
   .fly { animation: none; opacity: 0; }
   .lightbox-img, .gallery-cell img, .bar > i { transition: none; }
 }
+
+/* ---------- start fresh: the one destructive control ---------- */
+
+.danger-zone {
+  padding: 14px;
+  border: 1px solid rgba(240, 85, 63, 0.35);
+  border-radius: var(--radius);
+  background: rgba(240, 85, 63, 0.06);
+}
+.danger-zone .prose { margin-top: 0; color: #e0b3ab; }
+.btn-danger {
+  width: 100%; margin-top: 12px;
+  background: transparent;
+  border: 1px solid rgba(240, 85, 63, 0.7);
+  color: #ff8a75;
+}
+.btn-danger:active { background: rgba(240, 85, 63, 0.18); }
+.btn-danger.is-armed {
+  background: var(--bad); border-color: var(--bad); color: #1a0b08;
+}
+
+.reset-facts { display: flex; gap: 8px; margin-bottom: 12px; }
+.reset-fact {
+  flex: 1; padding: 10px 6px; text-align: center;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+}
+.reset-fact-v {
+  display: block; font-size: 20px; font-weight: 800;
+  font-variant-numeric: tabular-nums; color: var(--text);
+}
+.reset-fact-k {
+  display: block; margin-top: 2px; font-size: 10.5px;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim);
+}
+.sheet-body .btn-danger { margin-top: 10px; }

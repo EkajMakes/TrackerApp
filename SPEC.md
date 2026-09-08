@@ -1,6 +1,6 @@
 # SPEC.md — Habit Gamification PWA
 
-Version: rev. 7 (matches the built app through stage 5: undo, the Info tab, the asset pipeline)
+Version: rev. 8 (stage 5 plus the Start fresh control)
 Status: **built** — engine, storage, five-tab UI, PWA shell, export/import, undo, the asset
 pipeline and the week simulator. Verified in headless Chrome, including a true airplane-mode
 boot with the server stopped. Not yet done: Add to Home Screen on the real device, final icon
@@ -259,6 +259,26 @@ Import is the one operation that can bury real history, so it is **guarded**:
 | `schemaVersion` differs from `DB_VERSION` | **refused outright**, naming both versions. Not waivable by any confirmation — a mismatched file could scramble history in ways no prompt can make safe. |
 | the target database already holds completions | needs `confirmOverwrite`. The refusal names **both worlds** — *"This database has 47 completions through 2026-09-14; the file has 31 completions through 2026-09-02"* — so the choice is made with the numbers in view. |
 | the file's newest record predates the database's newest | needs `confirmStale`, **separately**. Confirming the overwrite does not waive it: restoring a stale backup over newer data is the specific mistake worth being loud about. |
+
+### Start fresh — the one destructive control
+
+The History tab ends with a **Start fresh** control that erases everything on the device and
+re-seeds. It exists for clearing test data before real use, and it is the single deliberate
+exception to rule 1 in `CLAUDE.md`:
+
+- it drops the **whole database** with `indexedDB.deleteDatabase` **at the call site in
+  `app.js`** — `db.js` still contains no delete path, and nothing in normal operation removes
+  a row. Whole-database or nothing; never per-record deletion;
+- the confirmation **names what will be destroyed** — completions, failures, balance, streak,
+  and the date range — in the same spirit as the import guard;
+- it **offers the export first**, as the primary button in the sheet;
+- the destructive button **arms on the first tap and only erases on the second**, disarming
+  itself after four seconds, so a fat finger on the History tab cannot wipe a month;
+- afterwards the app re-opens, re-seeds a fresh world (balance 0, streak 0, a new week of
+  skips) and returns to Today.
+
+`tests/export.test.js` covers the full cycle: live a week, wipe, re-open, and assert the world
+is empty and the re-seeded database is immediately usable with no tier carried over.
 
 `inspectImport(db, dump)` returns the same report (`blocking`, `needsConfirmation`, `target`,
 `file`) without writing anything, so a UI can show the numbers before asking. A matching backup

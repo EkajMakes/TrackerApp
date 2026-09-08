@@ -168,4 +168,20 @@ export function renderHistory(root, view, actions) {
   btn.type = 'button';
   btn.addEventListener('click', () => actions.exportData());
   root.append(btn);
+
+  /* --- start fresh ------------------------------------------------------ *
+   * Deliberately last, deliberately styled apart, and deliberately guarded
+   * behind a confirmation that names what is about to go. This is the one
+   * destructive control in the app. */
+  root.append(el('h2', 'sec', 'Start fresh'));
+  const danger = el('div', 'danger-zone');
+  danger.append(el('p', 'prose',
+    'Erases every completion, failure, redemption and skip on this device and starts the '
+    + 'tracker over at zero. Meant for clearing out test data before you begin for real. '
+    + 'Export first if there is anything here you want to keep — this cannot be undone.'));
+  const reset = el('button', 'btn btn-danger', 'Erase everything and start over');
+  reset.type = 'button';
+  reset.addEventListener('click', () => actions.resetAll(history.reset));
+  danger.append(reset);
+  root.append(danger);
 }

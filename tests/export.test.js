@@ -281,3 +281,43 @@ test('the export includes voided completions', async () => {
   assert.ok(live.some((c) => c.id === kept.completion.id));
   assert.equal(dump.completions.length, 3, 'every tap ever made is present');
 });
+
+/* ------------------------------------------------------------------ *
+ * Start fresh                                                         *
+ * ------------------------------------------------------------------ */
+
+test('erasing drops the database and re-seeds a clean world', async () => {
+  const factory = new IDBFactory();
+  const name = 'reset-cycle';
+  const { db } = await openTracker(factory, cfg, at('2026-09-07', 7), { name });
+
+  await completeTaskAction(db, cfg, at('2026-09-07', 9), { taskId: 'jobs' });
+  await completeTaskAction(db, cfg, at('2026-09-07', 10), { taskId: 'gym' });
+  const { world: lived } = await runRollover(db, cfg, at('2026-09-12', 9));
+  assert.ok(lived.completions.length > 0);
+  assert.ok(lived.failures.length > 0, 'a week of misses to erase');
+  db.close();
+
+  // The wipe, exactly as the app performs it: the whole database, at the call
+  // site — not a delete path inside db.js.
+  await new Promise((resolve, reject) => {
+    const req = factory.deleteDatabase(name);
+    req.onsuccess = resolve; req.onerror = reject; req.onblocked = resolve;
+  });
+
+  const { db: fresh, world } = await openTracker(factory, cfg, at('2026-09-12', 10), { name });
+  assert.equal(world.completions.length, 0, 'nothing survives the wipe');
+  assert.equal(world.failures.length, 0);
+  assert.equal(world.redemptions.length, 0);
+  assert.equal(world.state.balance, 0, 'the balance starts over at zero');
+  assert.equal(world.state.currentStreak, 0);
+  assert.equal(world.skips.length, cfg.skipsPerWeek, 'a fresh week of skips is granted');
+
+  // And the re-seeded database is fully usable, not a husk.
+  const res = await completeTaskAction(fresh, cfg, at('2026-09-12', 11), { taskId: 'gym' });
+  assert.equal(res.ok, true);
+  assert.equal(res.completion.pointsAwarded, cfg.tasks.gym.points, 'no tier carried over');
+
+  const settled = await runRollover(fresh, cfg, at('2026-09-13', 9));
+  assert.equal(settled.world.state.lastSettledAppDate, '2026-09-12', 'settlement resumes from today');
+});

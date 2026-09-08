@@ -6,8 +6,13 @@ Personal habit-gamification PWA. Offline-first, single user, no accounts, no ser
 ## Data
 
 1. **Records are never deleted.** End-of-life is a state transition on a retained row —
-   `resolvedAt` / `resolvedVia` for failures, `lapsedAt` for skips. A brief that says the log
-   "wipes" means it stops being redeemable, not that rows are removed.
+   `resolvedAt` / `resolvedVia` for failures, `lapsedAt` for skips, `voidedAt` for an undone
+   completion. A brief that says the log "wipes" means it stops being redeemable, not that rows
+   are removed. There is no delete path in `db.js` and nothing the app does in normal operation
+   removes a row. **One exception, added deliberately:** the "Start fresh" control in History
+   drops the *entire database* via `indexedDB.deleteDatabase` at the call site and re-seeds. It
+   is guarded by a confirmation that names what will be destroyed and offers an export first.
+   Whole-database or nothing — never per-record deletion.
 2. **Export dumps every store in full** — every completion, failure, redemption, skip, and
    weight entry ever recorded. Day-one feature, and the reason rule 1 exists.
 

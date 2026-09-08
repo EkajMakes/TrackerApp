@@ -1,0 +1,158 @@
+{
+  "_comment": "Habit gamification economy config. Tune these values weekly. Rule: penalty always equals points for quota and daily tasks.",
+
+  "dayBoundary": { "hour": 2, "timezone": "America/Chicago" },
+  "weekStart": "monday",
+
+  "balanceFloor": -250,
+  "bonusWeeklyCap": 120,
+  "bonusRequiresAnchor": true,
+  "skipsPerWeek": 5,
+  "skipsRollOver": false,
+
+  "tasks": {
+    "class": {
+      "label": "Go to Class",
+      "type": "quota",
+      "target": 4,
+      "points": 25,
+      "penalty": 25,
+      "days": ["mon", "wed", "thu", "fri"],
+      "anchor": true
+    },
+    "gym": {
+      "label": "Go to Gym",
+      "type": "quota",
+      "target": 5,
+      "points": 15,
+      "penalty": 15,
+      "days": "all",
+      "anchor": true
+    },
+    "content": {
+      "label": "Post Content Video",
+      "type": "quota",
+      "target": 5,
+      "points": 15,
+      "penalty": 15,
+      "days": "all",
+      "anchor": true,
+      "extraEarnsPoints": true
+    },
+    "pray": {
+      "label": "Pray",
+      "type": "daily",
+      "dailyTarget": 1,
+      "points": 10,
+      "penalty": 10,
+      "days": "all",
+      "anchor": false
+    },
+    "jobs": {
+      "label": "Apply for Jobs",
+      "type": "daily",
+      "dailyTarget": 1,
+      "points": 15,
+      "penalty": 15,
+      "days": "all",
+      "anchor": true
+    },
+    "weight": {
+      "label": "Log Weight",
+      "type": "daily",
+      "dailyTarget": 1,
+      "points": 5,
+      "penalty": 5,
+      "days": "all",
+      "anchor": false,
+      "unit": "lbs"
+    },
+
+    "stream": {
+      "label": "Stream",
+      "type": "target",
+      "target": 4,
+      "points": 20,
+      "targetBonus": 40,
+      "days": "all",
+      "anchor": true,
+      "dayFlags": {
+        "mon": "early",
+        "tue": "prime",
+        "thu": "early",
+        "sat": "early",
+        "sun": "early"
+      }
+    },
+    "study": {
+      "label": "Study for Classes",
+      "type": "target",
+      "target": 5,
+      "points": 12,
+      "targetBonus": 30,
+      "days": "all",
+      "anchor": true
+    },
+
+    "house": {
+      "label": "Helping Around House",
+      "type": "bonus",
+      "points": 20,
+      "dailyCap": 1,
+      "days": ["sat", "sun"]
+    },
+    "stockpile": {
+      "label": "Stockpile Videos",
+      "type": "bonus",
+      "points": 12,
+      "dailyCap": 2,
+      "days": ["sat", "sun"]
+    },
+    "volleyball": {
+      "label": "Play Volleyball",
+      "type": "bonus",
+      "points": 10,
+      "dailyCap": 1,
+      "days": ["sun"]
+    },
+    "read": {
+      "label": "Read",
+      "type": "bonus",
+      "points": 8,
+      "dailyCap": 1,
+      "days": "all"
+    },
+    "chore": {
+      "label": "Chore",
+      "type": "bonus",
+      "points": 5,
+      "dailyCap": 3,
+      "days": "all",
+      "pool": [
+        "Clean room",
+        "Fold clothes",
+        "Wash clothes",
+        "Dishes",
+        "Trash"
+      ]
+    }
+  },
+
+  "streak": {
+    "rule": "consecutive days with at least one anchor task completed",
+    "tiers": [
+      { "at": 3, "name": "Flowing", "multiplier": 1.05 },
+      { "at": 5, "name": "Cooking", "multiplier": 1.10 },
+      { "at": 10, "name": "Burning", "multiplier": 1.20 }
+    ]
+  },
+
+  "shop": [
+    { "name": "Medium Coke or Sprite", "cost": 80, "cooldownDays": 2 },
+    { "name": "McChicken", "cost": 120, "cooldownDays": 3 },
+    { "name": "Hour of Laziness", "cost": 150, "cooldownDays": 2 },
+    { "name": "Big Mac", "cost": 200, "cooldownDays": 4 },
+    { "name": "Skip Token", "cost": 250 },
+    { "name": "Movie", "cost": 300, "cooldownDays": 7 }
+  ]
+}

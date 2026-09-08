@@ -1,0 +1,15 @@
+# dependencies — the only one is fake-indexeddb, restored with `npm install`
+node_modules/
+
+# local browser profiles and scratch output from driving the app
+chrome-profile*/
+chrome-sw/
+*.log
+
+# machine-local Claude Code settings
+.claude/settings.local.json
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini

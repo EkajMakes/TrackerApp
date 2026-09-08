@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tracker">
+<meta name="theme-color" content="#0d1117">
+<title>Tracker</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+
+<div id="boot" class="boot">Loading…</div>
+
+<div id="app" hidden>
+  <!-- Pinned at the top on every tab: balance, pending, streak tier. -->
+  <header id="header" class="header"></header>
+
+  <main id="main" class="main">
+    <section id="view-today"    class="view"></section>
+    <section id="view-shop"     class="view" hidden></section>
+    <section id="view-failures" class="view" hidden></section>
+    <section id="view-history"  class="view" hidden></section>
+  </main>
+
+  <nav id="tabs" class="tabs">
+    <button class="tab is-active" data-tab="today"    type="button"><span class="tab-i">✓</span>Today</button>
+    <button class="tab"           data-tab="shop"     type="button"><span class="tab-i">★</span>Shop</button>
+    <button class="tab"           data-tab="failures" type="button"><span class="tab-i">!</span>Failures<span class="tab-badge" id="tab-badge" hidden></span></button>
+    <button class="tab"           data-tab="history"  type="button"><span class="tab-i">▤</span>History</button>
+  </nav>
+</div>
+
+<!-- Bottom sheet: numeric entry for weight/tracker, and the chore pool picker. -->
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-backdrop" data-close></div>
+  <div class="sheet-panel" role="dialog" aria-modal="true">
+    <h2 id="sheet-title" class="sheet-title"></h2>
+    <div id="sheet-body" class="sheet-body"></div>
+    <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>

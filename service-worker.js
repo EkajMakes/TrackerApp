@@ -1,0 +1,158 @@
+/**
+ * service-worker.js — offline shell, fresh config.
+ *
+ * Two policies, and only two:
+ *
+ *   config.json  → NETWORK-FIRST, cache fallback.
+ *                  The economy is retuned weekly, and a reload while online has
+ *                  to pick the new values up. Offline, the last good copy runs.
+ *
+ *   app shell    → CACHE-FIRST, versioned.
+ *                  index.html, the CSS, every module, the manifest and icons.
+ *                  This is what makes a cold start work in airplane mode.
+ *
+ * Nothing else is fetched at runtime — the app makes no network calls of its own.
+ *
+ * ---------------------------------------------------------------------------
+ * BUMP THIS BY HAND when shipping a new build. Nothing bumps it automatically;
+ * a stale shell is otherwise served forever, because cache-first never asks.
+ * ---------------------------------------------------------------------------
+ */
+const CACHE_VERSION = 1;
+
+const SHELL_CACHE = `tracker-shell-v${CACHE_VERSION}`;
+const CONFIG_CACHE = `tracker-config-v${CACHE_VERSION}`;
+const CONFIG_PATH = 'config.json';
+
+/** Everything needed for a cold start with no network. */
+const SHELL = [
+  './',
+  './index.html',
+  './manifest.json',
+  './css/style.css',
+  './js/app.js',
+  './js/config.js',
+  './js/time.js',
+  './js/scoring.js',
+  './js/views.js',
+  './js/db.js',
+  './js/rollover.js',
+  './js/ui/dom.js',
+  './js/ui/today.js',
+  './js/ui/shop.js',
+  './js/ui/failures.js',
+  './js/ui/history.js',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/apple-touch-icon.png',
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil((async () => {
+    // Precaching is best-effort. If CacheStorage is unavailable — storage
+    // pressure, eviction, a private-mode quirk — installing must still succeed:
+    // a worker that goes redundant here would take the fetch handler with it,
+    // leaving no offline shell at all. A miss is re-cached lazily on first use.
+    try {
+      const cache = await caches.open(SHELL_CACHE);
+      // Individually, so one missing file cannot fail the whole install.
+      await Promise.all(SHELL.map((url) => cache.add(url).catch(() => {})));
+    } catch (err) {
+      console.warn('shell precache skipped:', err.message);
+    }
+    try {
+      // config.json is precached too, even though it is network-first at
+      // runtime. The first page load fetches it BEFORE this worker controls
+      // the page, so without this a user who installs and then goes offline
+      // has an app shell but no economy to boot with.
+      const cache = await caches.open(CONFIG_CACHE);
+      await cache.add(`./${CONFIG_PATH}`);
+    } catch (err) {
+      console.warn('config precache skipped:', err.message);
+    }
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    try {
+      const keep = new Set([SHELL_CACHE, CONFIG_CACHE]);
+      for (const name of await caches.keys()) {
+        if (name.startsWith('tracker-') && !keep.has(name)) await caches.delete(name);
+      }
+    } catch (err) {
+      console.warn('old cache sweep skipped:', err.message);
+    }
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return; // nothing off-origin is ours
+
+  if (url.pathname.endsWith(CONFIG_PATH)) {
+    event.respondWith(networkFirst(request));
+    return;
+  }
+  event.respondWith(cacheFirst(request));
+});
+
+/** Fresh when online, last good copy when not. */
+async function networkFirst(request) {
+  const cache = await openCache(CONFIG_CACHE);
+  try {
+    const response = await fetch(request, { cache: 'no-store' });
+    if (response.ok && cache) await cache.put(request, response.clone());
+    return response;
+  } catch (err) {
+    const cached = cache && (await cache.match(request));
+    if (cached) return cached;
+    throw err;
+  }
+}
+
+/** Served from the versioned cache; only a miss reaches the network. */
+async function cacheFirst(request) {
+  const cached = await matchCache(request);
+  if (cached) return cached;
+
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      const cache = await openCache(SHELL_CACHE);
+      // Fills in anything the install-time precache missed.
+      if (cache) await cache.put(request, response.clone());
+    }
+    return response;
+  } catch (err) {
+    // A navigation that misses the cache still gets the app shell.
+    if (request.mode === 'navigate') {
+      const shell = await matchCache('./index.html');
+      if (shell) return shell;
+    }
+    throw err;
+  }
+}
+
+/** caches.open, but never throwing — returns null when storage is unavailable. */
+async function openCache(name) {
+  try {
+    return await caches.open(name);
+  } catch {
+    return null;
+  }
+}
+
+/** caches.match, but never throwing. */
+async function matchCache(request) {
+  try {
+    return await caches.match(request);
+  } catch {
+    return undefined;
+  }
+}

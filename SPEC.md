@@ -1,0 +1,793 @@
+# SPEC.md — Habit Gamification PWA
+
+Version: rev. 6 (matches the built app through stage 4)
+Status: **built** — engine, storage, UI, PWA shell, export/import and the week simulator.
+Verified in headless Chrome, including a true airplane-mode boot with the server stopped.
+Not yet done: Add to Home Screen on the real device, and final icon art.
+
+---
+
+## 1. Overview & constraints
+
+A single-user, offline-first habit tracker with a point economy, installed to the
+iPhone home screen from GitHub Pages.
+
+| Constraint | Decision |
+|---|---|
+| Stack | Vanilla HTML/CSS/JS. No framework, no bundler, no build step. ES modules loaded directly by Safari. |
+| Storage | IndexedDB only. No `localStorage` for anything that matters, no server, no runtime network calls. |
+| Hosting | GitHub Pages (https origin). Online on first load; fully functional offline thereafter, including airplane mode and cellular. Never depends on the user's PC. |
+| Install | `manifest.json` + service worker → "Add to Home Screen" yields a standalone, chrome-less app with its own icon. |
+| Target | iPhone Safari. Mobile-first, one-handed, large tap targets (min 44×44 pt). |
+| Time | Day boundary 02:00 `America/Chicago`; week boundary Monday 02:00 `America/Chicago`. IANA identifier only — no hardcoded UTC offset anywhere. |
+| Config | Everything tunable lives in `config.json`. No point value, task, tier, or shop item is duplicated in code. |
+
+### Definitions used throughout
+
+- **app-day `D`** — the interval `[D 02:00, D+1 02:00)` in `America/Chicago`, labelled with
+  the calendar date `D` (`YYYY-MM-DD`). A tap at 01:30 Tuesday belongs to app-day **Monday**.
+- **`appDate`** — that label, `YYYY-MM-DD`.
+- **`weekKey`** — the `appDate` of the Monday that opens the app-week containing a given app-day.
+  An app-week runs Monday 02:00 → next Monday 02:00 and contains exactly seven app-days.
+- **weekday roster** — derived from the `appDate` label, so the 01:30-Tuesday tap is rostered
+  against Monday's task list.
+- **week boundary** — the instant that closes app-day Sunday, i.e. Monday 02:00. Every week
+  boundary is also a day boundary; the reverse is not true.
+
+---
+
+## 2. File layout
+
+```
+/index.html                 single page, four sections
+/manifest.json              name, icons, display:standalone, theme colors
+/service-worker.js          versioned shell cache + config.json network-first
+/icons/
+    icon-192.png
+    icon-512.png
+    apple-touch-icon.png    (180×180 — iOS ignores manifest icons for the home screen)
+/css/
+    style.css
+/config.json                already present; read at runtime, never written
+/js/
+    config.js               fetch, validate, freeze config
+    time.js                 PURE — Intl-based boundary math
+    scoring.js              PURE — the engine: settlement, multiplier, caps, penalties
+    views.js                PURE — presentation derivations on top of the engine (§6.6)
+    rollover.js             orchestrator: DB in → scoring.js → views.js → DB out;
+                            also the only read path the ui/ modules use
+    db.js                   IndexedDB open/upgrade, CRUD, indexed queries, export/import
+    app.js                  entry point: owns the clock and the DOM shell (§6.7)
+    ui/
+        today.js            roster + the pinned header
+        shop.js
+        failures.js
+        history.js          weekly rollups + inline-SVG charts (no library)
+        dom.js              element helpers shared by the four screens
+    devtools/
+        weekSimulator.js    drives the pure engine from a hypothetical scenario (§12)
+/tests/
+    time.test.js
+    scoring.test.js
+    rollover.test.js
+    export.test.js          export/import round-trip
+    helpers.js              config variants and scenario builders, shared with the simulator
+/package.json                "type": "module" + the test script. One devDependency, fake-indexeddb,
+                            used only by tests/rollover.test.js. No runtime dependency, no build step.
+/SPEC.md
+/CLAUDE.md
+/BUILD_PROMPT.md            (existing)
+```
+
+`time.js`, `scoring.js` and `views.js` are free of DOM, IndexedDB, `Date.now()`, and
+`new Date()`-without-argument. That is what makes them runnable unmodified under
+`node --test`. The dependency direction never reverses:
+
+```
+time.js ─┬─> scoring.js ─┬─> views.js ──┐
+config.js┘               │              ├──> rollover.js ──> app.js ──> ui/*
+                    db.js ──────────────┘
+```
+
+### Service worker policy
+
+- **App shell** (`index.html`, CSS, all JS, icons, manifest): cache-first against a versioned
+  cache name (`tracker-shell-v<N>`), built from the single constant `CACHE_VERSION` at the top
+  of `service-worker.js`. **Bump it by hand to ship a build** — nothing bumps it automatically,
+  and cache-first never asks, so a stale shell would otherwise be served forever. The `activate`
+  handler deletes older `tracker-*` caches. This is what makes an airplane-mode cold start work.
+- **`config.json`**: **network-first with cache fallback**, so a reload while online always picks
+  up a retune, and offline the last good copy runs. It is *also* precached at install, because
+  the first page load fetches it before the worker controls the page — without that, a user who
+  installs and immediately goes offline would have a shell but no economy to boot with.
+- **Precaching is best-effort.** Every `caches` call is wrapped: if CacheStorage refuses to open
+  (storage pressure, eviction, a private-mode quirk), install still succeeds. A worker that goes
+  redundant during install takes the fetch handler with it, leaving *no* offline shell at all —
+  strictly worse than an empty cache that fills in lazily on first use.
+- Nothing else is ever fetched at runtime.
+
+### Install (`manifest.json` + iOS meta)
+
+`display: standalone`, portrait, `#0d1117` background and theme colour, `start_url` and `scope`
+relative so the app works from a GitHub Pages project subpath. iOS ignores manifest icons for
+the home screen, so `apple-touch-icon` (180×180) is linked directly, alongside
+`apple-mobile-web-app-capable` and a black-translucent status bar. Icons are flat placeholders
+generated at 192, 512 and 180 — replace the art without touching anything else.
+
+---
+
+## 3. Configuration & startup validation
+
+`config.js` fetches `config.json`, validates it, deep-freezes it, and exposes it. Validation
+throws loudly (a full-screen error panel, not a silent console warning) rather than booting
+with a broken economy:
+
+1. **`penalty === points` for every `quota` and `daily` task.** Required by the brief. Throw
+   listing every offender.
+2. Every task has a known `type` (`quota` | `daily` | `target` | `bonus` | `tracker`).
+3. Type-required fields present: `quota` → `target`, `points`, `penalty`; `daily` → `points`,
+   `penalty`; `target` → `target`, `points`, `targetBonus`; `bonus` → `points`, `dailyCap`.
+4. `days` is `"all"` or an array drawn from `mon…sun`. `dayFlags` keys likewise.
+5. `dailyTarget` defaults to `1` when absent on a `daily` task; must be a positive integer.
+6. Streak tiers sorted ascending by `at`, multipliers ≥ 1.
+7. Shop item names unique (they are the cooldown key); `cooldownDays` absent means no cooldown.
+8. `balanceFloor` ≤ 0; `bonusWeeklyCap` ≥ 0; `skipsPerWeek` ≥ 0.
+
+**Config is not versioned into the database.** Changing a point value retunes the future only;
+already-recorded `pointsAwarded` and `actualDeduction` values are historical fact and are never
+recomputed. A `daily` task deleted from config stops generating failures from the next rollover;
+its past entries remain in history and export.
+
+---
+
+## 4. IndexedDB schema
+
+Database `habitTracker`, version 1. Six object stores. **Nothing is ever deleted from any
+store** — end-of-life is a state transition on a retained row, which keeps the JSON export a
+complete record of everything that ever happened.
+
+### `completions` (keyPath `id`) — append-only event ledger, source of truth for all counts
+
+| field | notes |
+|---|---|
+| `id` | `cmp:<taskId>:<ISO timestamp>` |
+| `taskId` | key into `config.tasks` |
+| `timestamp` | UTC ISO string, real wall-clock instant of the tap |
+| `appDate` | derived from `timestamp` at write time |
+| `weekKey` | derived from `appDate` at write time |
+| `taskType` | snapshot of the type at completion time |
+| `pointsAwarded` | number, or **`null` while a `bonus` completion is unsettled** |
+| `multiplierApplied` | the tier multiplier used, or `null` if unsettled / zero-award |
+| `settledAt` | UTC ISO; equals `timestamp` for everything except `bonus` |
+| `gateReason` | `'anchor-missing'` \| `'weekly-cap'` \| `'over-target'` \| `null` |
+| `value` | numeric payload for `weight` / `tracker` tasks, else `null` |
+| `unit` | snapshot from config (`"lbs"`) |
+| `poolLabel` | chosen label for pool-backed `bonus` tasks (`chore`), else `null` |
+
+A **target bonus** is recorded here too, as a synthetic completion with
+`taskType: 'target-bonus'` and the deterministic id `tb:<taskId>:<weekKey>`. It is a
+point-earning event, so it belongs in the ledger the export dumps and the History
+view reads, and its deterministic id makes a replayed week close a no-op. A *missed*
+target instead appends to **`missedTargets`** — `{ id: 'miss:<taskId>:<weekKey>',
+taskId, label, weekKey, target, reached, forfeited, at }` — which is display-only:
+not a failure, not skip-redeemable, never a balance change.
+
+Indexes: `by_taskId_weekKey` (`[taskId, weekKey]`), `by_appDate`, `by_weekKey`,
+`by_settledAt` (unsettled bonuses are the rows where `pointsAwarded` is `null`; IndexedDB
+does not index `null`, so unsettled rows are found via the `by_appDate` range for the day
+being settled and filtered in memory — the set is tiny).
+
+### `failures` (keyPath `id`) — never deleted
+
+| field | notes |
+|---|---|
+| `id` | deterministic, and **keyed differently by kind**: `daily` → `fail:<taskId>:<incurredAppDate>:<n>`, `quota` → `fail:<taskId>:<incurredWeekKey>:<n>` (`n` = 0-based index within that group). A quota shortfall belongs to a *week*, not to whichever Sunday happened to close it, so the week key is the semantically correct idempotency key and stays stable if that boundary is ever reprocessed. |
+| `taskId`, `label` | label snapshotted so history survives config edits |
+| `kind` | `'daily'` \| `'quota'` |
+| `incurredAppDate` | the app-day that closed (for `quota`, the Sunday that closed the week) |
+| `incurredWeekKey` | the week the miss belongs to |
+| `redeemThroughWeekKey` | last week during which this entry is redeemable — see §5.2 |
+| `penalty` | the configured value, for display |
+| `actualDeduction` | the **real** balance delta after floor clamping — what a skip refunds |
+| `createdAt` | UTC ISO of the boundary instant that wrote it |
+| `resolvedAt` | `null` while open |
+| `resolvedVia` | `'skip'` \| `'expired'` \| `null` |
+| `resolvedBySkipId` | set when `resolvedVia === 'skip'` |
+
+Indexes: `by_redeemThroughWeekKey`, `by_incurredWeekKey`, `by_taskId`.
+**Open** = `resolvedAt === null`.
+
+### `redemptions` (keyPath `id`)
+
+`{ id: 'rdm:<ISO>', itemName, cost, timestamp, balanceAfter }`. Index `by_itemName`.
+Cooldown state is **derived** from the newest timestamp for that item — never stored,
+so editing `cooldownDays` in config takes effect immediately.
+
+### `skips` (keyPath `id`)
+
+`{ id, source: 'weekly-grant' | 'purchase', grantedWeekKey, grantedAt, redemptionId, spentAt, spentOnFailureId, lapsedAt }`.
+Deterministic ids: `skip:grant:<weekKey>:<n>` and `skip:buy:<ISO>`.
+**Available** = `spentAt === null && lapsedAt === null`.
+Index `by_grantedWeekKey`.
+
+### `state` (keyPath `id`) — exactly one row, `id: 'app'`
+
+`{ id:'app', schemaVersion, lastProcessedTimestamp, lastSettledAppDate, balance, currentStreak, currentWeekKey, installedAt }`
+
+`lastSettledAppDate` is the app-day most recently settled. It is the guard that
+makes a *day* un-settleable twice even if a caller replays boundaries from a rewound
+pointer — the deterministic ids stop duplicate rows and the pending filter stops a
+second bonus award, but only this guard stops the streak from incrementing twice.
+
+Only these six values are cached. Weekly quota/target counts, bonus headroom, shop cooldowns,
+skip balance, and the failure log are **derived from the ledgers on demand**. That is the
+mechanism that makes rollover idempotent by construction: there is no denormalized counter
+that a double-run could double-increment.
+
+`state.balance` is the **settled** balance. It deliberately **excludes the current app-day's
+unsettled `bonus` completions**, which have `pointsAwarded: null` until day close — see §6.5.
+
+### Export and import
+
+`exportDatabase(db, cfg, now)` reads **every store in full**, straight from IndexedDB rather
+than from any in-memory view: completions (including the synthetic `target-bonus` records and
+still-pending bonuses), failures open / redeemed / expired, redemptions, skips available /
+spent / lapsed, missedTargets, the state row, and a snapshot of the config in use. The History
+tab writes it out as `tracker-export-YYYY-MM-DD.json` (Web Share on iOS, a download elsewhere).
+
+`importDatabase(db, dump, options)` is its counterpart, for restoring a backup. It puts rows by
+their own ids and **clears nothing** — there is still no delete path anywhere in `db.js`. Wiping,
+when that is genuinely wanted, is `indexedDB.deleteDatabase` at the call site.
+
+Import is the one operation that can bury real history, so it is **guarded**:
+
+| check | behaviour |
+|---|---|
+| `schemaVersion` differs from `DB_VERSION` | **refused outright**, naming both versions. Not waivable by any confirmation — a mismatched file could scramble history in ways no prompt can make safe. |
+| the target database already holds completions | needs `confirmOverwrite`. The refusal names **both worlds** — *"This database has 47 completions through 2026-09-14; the file has 31 completions through 2026-09-02"* — so the choice is made with the numbers in view. |
+| the file's newest record predates the database's newest | needs `confirmStale`, **separately**. Confirming the overwrite does not waive it: restoring a stale backup over newer data is the specific mistake worth being loud about. |
+
+`inspectImport(db, dump)` returns the same report (`blocking`, `needsConfirmation`, `target`,
+`file`) without writing anything, so a UI can show the numbers before asking. A matching backup
+into an empty database needs no confirmation at all.
+
+`tests/export.test.js` covers the round trip — export, delete the database, reimport, assert the
+restored world is deep-equal to the original, then keep settling and completing tasks against the
+restored copy — plus each of the three refusals and the unprompted fresh restore.
+
+### First run
+
+`state` seeded with `balance: 0`, `currentStreak: 0`, `lastProcessedTimestamp = now`,
+`currentWeekKey = weekKeyOf(now)`, and `skipsPerWeek` weekly-grant skips for the current week.
+No retroactive settlement of days before install.
+
+---
+
+## 5. Time module (`time.js`)
+
+All functions take an explicit instant (epoch ms or ISO) — none reads the clock.
+
+```js
+appDateOf(instantMs, cfg)          // → 'YYYY-MM-DD'
+weekKeyOf(appDate, cfg)            // → Monday's 'YYYY-MM-DD'
+weekKeyAfter(weekKey)              // → weekKey + 7 days
+weekdayOf(appDate)                 // → 'mon'…'sun'
+dayBoundaryInstant(appDate, cfg)   // → epoch ms of that app-day's 02:00 open
+nextDayBoundaryAfter(instantMs, cfg)
+isWeekBoundary(appDate)            // true when appDate is a Sunday (its close is Monday 02:00)
+```
+
+**How the offset is obtained without hardcoding one.** `Intl.DateTimeFormat` with
+`timeZone: 'America/Chicago'` and `hourCycle: 'h23'` formats the UTC instant into local
+wall-clock parts; the shift from those parts back to a UTC instant gives the zone's true
+offset at that instant. Converting a wall-clock time to an instant uses the standard
+two-pass fixpoint (guess with the offset at the naive instant, re-derive, re-apply), which
+resolves correctly on both DST edges.
+
+**DST behaviour at 02:00 Central.** The US spring-forward transition is at 02:00 local — the
+exact boundary hour. The two-pass conversion resolves the nonexistent 02:00 on that Sunday
+forward to 03:00 CDT, and the ambiguous fall-back hour to the first (CDT) occurrence. The
+practical consequence is that a day boundary can be up to one hour long or short twice a
+year; no day is ever skipped or processed twice, because the walk enumerates *app-days*, not
+fixed 24-hour spans.
+
+---
+
+## 6. Scoring engine (`scoring.js`) — pure
+
+Signature shape: every function takes `(state, ledgerSlice, config, nowMs)` and returns a
+plain description of what changed. It never touches the DOM, IndexedDB, or the clock.
+
+### 6.1 Multiplier
+
+`tierFor(streak, cfg)` returns the highest tier whose `at` ≤ streak, else `{multiplier: 1, name: null}`.
+Config gives 3 → Flowing 1.05×, 5 → Cooking 1.10×, 10 → Burning 1.20×.
+
+- Applied **only to earned points**: task completions and `targetBonus`.
+- **Never** applied to penalties, and never to skip refunds.
+- Applied at the moment points are awarded, never retroactively when the tier changes.
+- Awards round with `Math.round`. Configured penalties are integers and are never multiplied.
+
+### 6.2 Streak timing — documented, deliberate lag
+
+The streak increments at **day rollover**, so points earned *during* an app-day use the tier
+that was settled at that day's **start**. Completing a 10th consecutive anchor day therefore
+does not pay Burning until day 11.
+
+The Today header must display **the tier currently being applied**, not the tier the user is
+on track to reach. A secondary line may read "1 more day → Burning 1.20×" but the headline
+number is always the live multiplier. This is the single most likely thing to be mistaken for
+a bug, so the UI states it rather than hiding it.
+
+### 6.3 Award rules by task type
+
+| type | at tap | at day close | at week close |
+|---|---|---|---|
+| `quota` | `points × tier`, or **0 once the weekly `target` is already met** unless `extraEarnsPoints` (then full points, uncapped) — `gateReason:'over-target'` | — | one Failure **per unit short** |
+| `daily` | `points × tier` for each completion up to `dailyTarget`; beyond that 0 unless `extraEarnsPoints` | one Failure **per completion short** of `dailyTarget` | — |
+| `target` | `points × tier` on every completion | — | `targetBonus × tier` **once** if `count ≥ target`; otherwise **"bonus missed"** — not a Failure, not skip-redeemable |
+| `bonus` | **nothing** — recorded with `pointsAwarded: null` | settled: see §6.4 | — |
+| `tracker` | `points × tier` for logging | — | — |
+
+**Weight scoring, restated because it matters:** points are awarded for *the act of recording*.
+The recorded number never affects points, penalties, streaks, or multipliers. It is stored for
+history and charting only. `weight` is configured as a `daily` (5 pts, 5 penalty, `anchor:false`),
+so missing it costs 5 — but logging 300 lbs and logging 150 lbs pay identically.
+
+`tracker` is implemented but currently unused by `config.json`; it exists so a future retune can
+add a value-logging task with no penalty.
+
+### 6.4 Bonus gating — settled at day close, not at tap
+
+Scoring a bonus at tap time cannot be correct: whether it pays depends on facts not yet known
+(will an anchor land later today? will the weekly cap absorb it?). So:
+
+- A bonus tap records immediately with `pointsAwarded: null`. `dailyCap` **is** enforced at tap
+  time — it caps the number of completions, not points, and needs no future knowledge.
+- At day close, the day's bonus completions settle in timestamp order:
+  - if `bonusRequiresAnchor` and the day had **zero** anchor completions → all award 0,
+    `gateReason: 'anchor-missing'`;
+  - otherwise each pays `min(round(points × tier), remainingWeeklyHeadroom)` where headroom is
+    `bonusWeeklyCap − bonus points already awarded in that day's own weekKey`. A partially or
+    fully absorbed award gets `gateReason: 'weekly-cap'`.
+  - `tier` is the one settled at that day's start (§6.2), and settlement runs **before** the
+    streak increments.
+- **This is still "score once, never retroactively."** The score is computed a single time,
+  at day close, when both inputs are final. A chore done at 9am and an anchor done at 8pm land
+  in the same settlement, so doing chores early is no longer punished.
+
+### 6.5 Provisional bonus points — pending vs. settled
+
+Because bonus completions settle at day close, **the current day's bonus points are not in
+`state.balance`**. The balance shown is always the settled one; pending points are shown
+beside it, never folded into it.
+
+```
+pending       = Σ round(task.points × tierFor(state.currentStreak))
+                over today's completions where pointsAwarded === null
+anchoredToday = any completion today on a task with anchor: true
+locked        = config.bonusRequiresAnchor && !anchoredToday
+```
+
+**The figure is gate-aware.** The anchor gate is knowable *now*, so a plain "+29 pending" on a
+day with zero anchor completions would advertise points that settlement is guaranteed to award
+as 0 — precisely the misread the figure exists to prevent.
+
+- **Locked** (no anchor completed yet today) — render `+29 locked — complete an anchor task`.
+  Not a pending figure and not a promise: a stated condition, with the action that clears it.
+- **Unlocked** (an anchor has landed) — render the normal `412 pts (+29 pending)`, the pending
+  figure visually subordinate to the settled number. The switch happens the instant the day's
+  first anchor is tapped, which is also the moment the locked-but-tappable bonus tiles unlock.
+- **The weekly cap remains an estimate** in both states, and the UI says so in words next to
+  the figure: the cap can absorb part of the total at settlement. Remaining weekly headroom is
+  shown alongside so that case is predictable rather than surprising. The cap is now the *only*
+  source of drift — the tier is fixed for the whole app-day (§6.2), and the anchor gate is
+  reflected live.
+- **The Shop uses the settled balance only for affordability** (§8.2). An item priced above
+  `balance` is not redeemable however large `pending` is, and a *locked* total is never used to
+  justify a tile's near-affordable note.
+
+### 6.6 `views.js` — presentation derivations
+
+A `ui/` module computes nothing. It turns a view model into elements and wires taps to
+actions; every number, label, gate state, progress figure and sort order arrives already
+derived. Those derivations live in `views.js`, which is **pure on the same terms as the
+engine** — no DOM, no IndexedDB, no `Date.now()`, the instant passed in as an argument —
+so it is testable under `node --test` and cannot drift from the rules.
+
+It owns exactly four things beyond the pass-throughs of `pendingSummary`, `groupedFailures`
+and `shopState`:
+
+| derivation | what it produces |
+|---|---|
+| **roster assembly** | today's rostered tasks with per-task progress (`done/target`, day / week / cap scope), day flags, `awardNow` at the tier in force, and the per-tile locked / cap-reached / over-target states |
+| **weekly rollups** | completions grouped by `weekKey` into per-task counts and points, with the week's penalties, skip refunds and net, and pending bonuses reported as pending rather than as zero |
+| **balance series** | every balance-moving event (awards, penalties, skip refunds, redemptions) sorted and accumulated into a running line. `state.balance` remains authoritative; the series is for shape |
+| **weight series** | the recorded values, in order, with bounds. **Value only** — no points, penalty, multiplier or other scoring signal travels with it |
+
+What it must never do is decide a rule. Points, penalties, gates, caps and tiers are read
+from `scoring.js` and `config.js`; `views.js` only arranges the answers. `rollover.js`
+re-exports it through `loadView()`, which settles first, so the `ui/` modules have exactly
+one read path and never touch `db.js`.
+
+### 6.7 `app.js` — the clock and the DOM shell
+
+Everything above is pure or storage-bound, which leaves two impure jobs, and `app.js` owns
+both and nothing else:
+
+- **the clock** — the single place `Date.now()` is called. It flows into `loadView` and every
+  action as an explicit `nowMs`, which is why the engine never needs a fake clock in tests;
+- **the DOM shell** — the header/tab/sheet/toast chrome in `index.html`, tab routing, the
+  numeric-entry and pool-picker sheets, the export download, the service-worker registration,
+  and the `visibilitychange` refresh that settles elapsed boundaries when the app is reopened.
+
+It holds no rules. Every read goes through `loadView()`; every write goes through
+`completeTaskAction` / `spendSkipAction` / `redeemItemAction`, i.e. through `withRollover`,
+so no user path can act on unsettled state.
+
+---
+
+## 7. Rollover algorithm (`rollover.js`)
+
+Lazy and idempotent. Runs on app open (and on `visibilitychange` → visible, and before any
+user action). Never scheduled: no cron, no background job, no push.
+
+### 7.1 Failure lifetime rule
+
+> A Failure incurred during week `W` carries `redeemThroughWeekKey = W+1`. It is **open from
+> the instant it is written** until the boundary that ends `W+1`, where it resolves as
+> `'expired'`.
+
+At a week boundary this is exactly "tag the new entries with the NEW weekKey, and resolve the
+entries belonging to the previous one" — and it extends the same guarantee to mid-week daily
+misses. Every Failure is live for the remainder of the week it was incurred in **plus the whole
+following week**. See §9.1 for the flag on this.
+
+### 7.2 The walk
+
+```
+rollover(now):
+  if now <= state.lastProcessedTimestamp:      # backward clock jump — see §8.4
+      return unchanged
+
+  boundaries = every day-boundary instant in (state.lastProcessedTimestamp, now], ascending
+  for each boundary b:
+      D         = the app-day that b closes
+      if D <= state.lastSettledAppDate: continue    # already settled — see §7.3
+      isWeekEnd = weekdayOf(D) == 'sun'
+      tier      = tierFor(state.currentStreak)      # settled at D's START
+      anchored  = exists completion c on D where config.tasks[c.taskId].anchor == true
+
+      # ---- 1. settle D's bonus completions (before the streak moves) ----
+      headroom = bonusWeeklyCap - bonusPointsAwardedIn(D.weekKey)
+      for each unsettled bonus completion on D, in timestamp order:
+          if bonusRequiresAnchor and not anchored:
+              pts = 0; gateReason = 'anchor-missing'
+          else:
+              full = round(points * tier)
+              pts  = max(0, min(full, headroom)); headroom -= pts
+              gateReason = (pts < full) ? 'weekly-cap' : null
+          write pointsAwarded=pts, multiplierApplied=tier, settledAt=b, gateReason
+          balance += pts
+
+      # ---- 2. daily misses for D ----
+      for each daily task T rostered on weekdayOf(D):
+          short = max(0, (T.dailyTarget ?? 1) - completionCount(T, D))
+          repeat short times as n:
+              writeFailure(T, kind='daily', incurredAppDate=D,
+                           redeemThroughWeekKey = weekKeyAfter(D.weekKey))
+
+      if isWeekEnd:
+          # ---- a. expire the previous cycle's failures: RESOLVE, never delete ----
+          for each open failure F where F.redeemThroughWeekKey == D.weekKey:
+              F.resolvedAt = b; F.resolvedVia = 'expired'   # permanently unredeemable — §7.4
+
+          # ---- c. quota shortfalls for the week that just closed ----
+          for each quota task T:
+              repeat max(0, T.target - completionCount(T, D.weekKey)) times as n:
+                  writeFailure(T, kind='quota', incurredAppDate=D,
+                               redeemThroughWeekKey = weekKeyAfter(D.weekKey))
+
+          # ---- d. target bonuses ----
+          for each target task T:
+              if completionCount(T, D.weekKey) >= T.target:
+                  balance += round(T.targetBonus * tier)
+              else:
+                  record 'bonus missed' for (T, D.weekKey)   # display only; no Failure
+
+          # ---- e. skips ----
+          for each available skip S where S.source=='weekly-grant'
+                                      and S.grantedWeekKey == D.weekKey:
+              S.lapsedAt = b                     # purchased skips are untouched — §7.4
+          grant skipsPerWeek new weekly-grant skips for weekKeyAfter(D.weekKey)
+          state.currentWeekKey = weekKeyAfter(D.weekKey)
+
+      # ---- 3. streak LAST ----
+      state.currentStreak     = anchored ? state.currentStreak + 1 : 0
+      state.lastSettledAppDate = D
+
+  state.lastProcessedTimestamp = now
+```
+
+**Ordering is the point.** The first draft wrote quota-shortfall Failures tagged with the
+closing week and then wiped that week's Failures in the same pass, erasing them instantly —
+and the same bug swallowed every Sunday daily miss, because the final day boundary of a week
+*is* the week boundary. Expiring first and tagging new entries forward fixes both. §10 pins a
+test to each face of it.
+
+```
+writeFailure(T, kind, incurredAppDate, redeemThroughWeekKey):
+    newBalance      = max(balanceFloor, balance - T.penalty)
+    actualDeduction = balance - newBalance          # what the miss really cost
+    balance         = newBalance
+    id = (kind == 'quota') ? 'fail:<T.id>:<incurredWeekKey>:<n>'    # a quota miss belongs
+                           : 'fail:<T.id>:<incurredAppDate>:<n>'    # to a week, not a Sunday
+    append failures { id, penalty: T.penalty, actualDeduction, resolvedAt: null, ... }
+```
+
+### 7.3 Idempotency
+
+Four mechanisms, layered so that no single one carries the guarantee alone:
+
+1. `lastProcessedTimestamp` advances monotonically, so a boundary is enumerated once.
+2. Every settlement write uses a **deterministic id** (`fail:jobs:2026-09-03:0`,
+   `skip:grant:2026-09-07:2`), so a replay overwrites rather than duplicates.
+3. Balance-changing steps are driven off ledger state, and bonus settlement only touches rows
+   whose `pointsAwarded` is still `null`, so a banked bonus is never re-awarded.
+4. `state.lastSettledAppDate` refuses to settle an app-day twice. This is the only one of
+   the four that protects the STREAK, which is derived incrementally rather than from an id.
+
+The whole walk runs in **one IndexedDB readwrite transaction** spanning all six stores, so a
+crash or a backgrounded tab mid-walk rolls back to the pre-run state and the next open redoes
+it cleanly. A partially-settled week is never persisted.
+
+### 7.4 Skips
+
+- `skipsPerWeek` (5) granted automatically at each week boundary.
+- **Unused weekly grants do not roll over** — they lapse (`lapsedAt` set, row retained).
+- **Purchased skips never lapse.** `skipsRollOver: false` governs `source: 'weekly-grant'`
+  only. A Skip Token bought for 250 points persists until it is spent, however many week
+  boundaries pass. Spending one costs real points and must not evaporate.
+- **Never auto-applied.** Spent manually against a specific Failure entry.
+- Spending prefers an available **weekly-grant** skip over a purchased one, since grants are
+  use-it-or-lose-it.
+
+**Spending a skip:**
+```
+spendSkip(failureId):
+    F = failures[failureId]
+    if F is missing or F.resolvedAt != null: REJECT — no-op       # guard, see below
+    S = an available skip, weekly-grant preferred; if none: REJECT — no-op
+    F.resolvedAt = now; F.resolvedVia = 'skip'; F.resolvedBySkipId = S.id
+    S.spentAt = now; S.spentOnFailureId = F.id
+    balance += F.actualDeduction          # exactly what it cost — never F.penalty
+```
+
+**The guard is not optional.** Any failure with a non-null `resolvedAt` is rejected, which
+covers both an entry already cleared by a skip and one that expired at a week boundary. **An
+expired entry is permanently unredeemable** — no code path reopens one, and the one-week
+redemption window is exactly what the brief asks for. Both checks run before a skip is
+consumed and before any balance change, so a rejected attempt leaves the skip, the failure,
+and the balance untouched. Without this, a stale UI list or a double-tap would refund the same
+entry twice, or resurrect points from a lapsed one. §10 pins a test to it.
+
+Refunding the configured `penalty` would mint points out of nothing whenever the floor had
+clamped the original hit: at the floor a miss costs 0 but would refund 15, farmable
+indefinitely. Refunding `actualDeduction` closes it. When `actualDeduction` is 0 the confirm
+step must say so plainly — *"This entry cost 0 points (balance was at the floor). Spending a
+skip clears it but refunds nothing."*
+
+---
+
+## 8. Balance, shop, and edge cases
+
+### 8.1 Balance
+
+Carries over indefinitely, may go negative, hard floor at `balanceFloor` (−250). No automatic
+debt forgiveness. Shop redemption is blocked while the balance is negative.
+
+### 8.2 Shop
+
+Catalog straight from `config.shop`. Redeeming requires `balance >= cost` **and** `balance >= 0`
+**and** the item off cooldown — where `balance` is the **settled** balance (§6.5). Pending
+bonus points never make an item redeemable.
+
+They do, however, change what the tile *says*. When `cost > balance` but
+`cost <= balance + pending`, the tile stays disabled and explains itself rather than sitting
+there greyed out with no reason — and the wording follows the gate state (§6.5):
+*"Needs 12 more — 29 pending settles tonight"* when unlocked, or
+*"Needs 12 more — 29 locked until an anchor task"* when not. A flatly unaffordable item shows
+the plain shortfall. The negative-balance block is independent of pending and is stated as its
+own reason.
+
+Cooldown is derived: `lastRedemption(item) + cooldownDays × 24h`,
+measured in real elapsed time (not app-days), rendered as a disabled tile with remaining time.
+Items with no `cooldownDays` (Skip Token) have no cooldown. Every redemption is logged with a
+timestamp and the resulting balance. The Skip Token is an ordinary item that additionally
+inserts a `source: 'purchase'` row into `skips`.
+
+### 8.3 Multi-week catch-up
+
+Boundaries settle strictly oldest-first, each week reading only its own `weekKey` counts, so
+three weeks of absence settle as three independent weeks rather than one merged blob. Inside
+that same pass, week `W`'s failures are written tagged `W+1` and then expired at the boundary
+ending `W+1` — so after a long absence only the most recent cycle's entries are still open.
+The balance hits all applied; the *opportunity to redeem* the older ones is gone. That is the
+intended shape of the system, and the History view labels those entries `expired` so the user
+can see exactly what lapsed.
+
+### 8.4 Device clock changes & DST
+
+- All boundary math is recomputed from the raw UTC instant on every run via `Intl`. No offset
+  is ever persisted, so a CST↔CDT transition needs no migration.
+- **Backward clock jump** (`now < lastProcessedTimestamp`): the walk enumerates nothing and
+  `lastProcessedTimestamp` is left alone. Nothing is undone, no failure is re-written, no
+  balance moves. When real time catches back up, the walk resumes from the same pointer.
+- **Forward clock jump** (manual clock change or a long absence — indistinguishable, by
+  design): treated as elapsed time and settled normally. A user who jumps the clock forward a
+  month settles a month of misses. Accepted: there is no way to distinguish this from having
+  genuinely not opened the app, and the system is for one honest user.
+- The 02:00 boundary colliding with the US DST transition hour is handled by the fixpoint
+  conversion in §5; no app-day is skipped or double-processed.
+
+### 8.5 Completion after the day boundary, before the app is reopened
+
+Completions stamp the real wall-clock instant and derive `appDate` from it. Rollover settles
+only boundaries strictly at or before `now`. So a 3:00am Tuesday tap is app-day Tuesday, and
+Monday's close — which runs at the *same* app-open, before the tap — correctly sees Monday
+without it. Order on open is always: **rollover first, then accept input.** A completion can
+therefore never be retro-applied to a day that has already closed, and never leaks into the
+wrong week's quota count.
+
+### 8.6 Bonus before the day's first anchor, then an anchor later — **recommendation**
+
+**The bonus does pay, and this is not retroactive scoring.** Per §6.4 the bonus was never
+scored at tap; it carried `pointsAwarded: null` until day close, at which point the anchor
+had landed and the completion settles at full value. Scoring happens exactly once, on final
+inputs.
+
+The rejected alternative — score at tap, lock in 0 forever — is defensible on "never rescore"
+grounds but creates a perverse incentive to sit on chores until an anchor lands, which is the
+opposite of what the system should encourage. Deferring settlement gets the incentive right
+*and* preserves the score-once rule. The cost is that the Today view must distinguish
+provisional points from banked ones, which it does explicitly.
+
+---
+
+## 9. Resolved decisions & standing notes
+
+**Resolved** (previously open, now settled):
+
+1. **Mid-week failure lifetime — the longer, uniform reading.** "Live for the full week
+   following the one it was incurred in" applies to every failure regardless of which day it
+   was incurred, so a Wednesday daily miss stays open through the end of the *next* week —
+   about 11 days, not 4. The shorter reading is rejected.
+2. **Failure log sorts by `actualDeduction` descending** — by what a skip actually returns,
+   not by the configured `penalty`. Once the floor has clamped things those diverge, and the
+   top row should always be the most valuable redemption. Both numbers show on every row.
+3. **`tracker` implemented but unused.** `weight` is a penalised `daily`; `tracker` exists for
+   a future retune.
+4. **Rounding.** `Math.round` on multiplied awards (`round(15 × 1.05) = 16`). Penalties are
+   integers and never multiplied.
+
+**Standing notes** — consequences of the current config, not open questions:
+
+5. **`pray` is `anchor: false`.** A day whose only completion is praying breaks the streak and
+   gates that day's bonus points to 0. Worth knowing; changing it is a config edit, not a code
+   change.
+6. **Config edits mid-week affect the future only.** Recorded awards and deductions are
+   historical fact and are never recomputed. Lowering a `target` mid-week means the week closes
+   against the new value.
+
+---
+
+## 10. Tests (`node --test`, zero dependencies)
+
+The engine is pure, so the tests import `scoring.js` / `time.js` / `rollover.js` directly and
+feed them fixture state and explicit instants.
+
+**Regression tests pinned to the corrections:**
+
+| test | asserts |
+|---|---|
+| `monday morning after a quota shortfall` | run a week 2 short on `gym`, cross Monday 02:00, then assert the failure log is **non-empty, open, and skip-redeemable** — the exact case the first draft's ordering destroyed |
+| `sunday daily miss survives its own week boundary` | a Sunday `jobs` miss is open on Monday morning, not swallowed by the same-instant week close |
+| `failure expiry resolves, never deletes` | after two week boundaries the entry has `resolvedVia: 'expired'` and is still present in `getAll()` and in the export |
+| `refund at floor` | penalty absorbed by `balanceFloor` refunds exactly `actualDeduction` (possibly 0), never `penalty` |
+| `expired entries are unredeemable` | expire an entry across two week boundaries, then `spendSkip` on it: rejected, balance unchanged, no skip consumed |
+| `double-spend rejected` | `spendSkip` twice on the same open entry: second call rejected, exactly one skip consumed, refund applied once |
+| `pending excludes settled balance` | today's unsettled bonus completions are absent from `state.balance` and present in `pending` at the day-start tier |
+| `pending is gate-aware` | with no anchor completed today the figure reports `locked`; after an anchor lands the same completions report as ordinary pending |
+| `failure grouping key` | two same-task entries with different `actualDeduction` (one floor-clamped) render as two groups, never one |
+| `purchased skip survives, granted skip lapses` | across a week boundary: `source:'purchase'` still available, `source:'weekly-grant'` has `lapsedAt` |
+| `bonus settles at day close` | pays full when a later anchor lands the same day; pays 0 with `gateReason:'anchor-missing'` when none does; partial with `'weekly-cap'` at the cap edge |
+| `streak lag` | points earned on the 10th consecutive day use the day-start tier, not Burning |
+| `idempotency` | two consecutive rollovers from identical input produce byte-identical state and ledgers |
+| `multi-week catch-up` | 23 days of absence settles each week independently; only the last cycle's failures remain open |
+| `dailyTarget > 1` | a `dailyTarget: 3` task completed twice awards 2× points and writes exactly 1 Failure |
+| DST | the spring-forward and fall-back Sundays each produce exactly one day boundary |
+| config validation | `penalty !== points` on a `quota`/`daily` task throws |
+
+Run: `node --test tests/`
+
+---
+
+## 11. UI
+
+Single page, four sections, bottom tab bar (thumb-reachable). Sticky header on every tab shows
+the **settled balance** with today's bonus points beside it — `412 pts (+29 pending)` once an
+anchor has landed, `412 pts (+29 locked — complete an anchor task)` before one has (§6.5) —
+the **streak tier currently being applied**, and available skips.
+
+**Today** — the roster for the current weekday, tap to complete.
+- The pending/locked figure sits next to the balance with its caveat in plain words. The anchor
+  gate is shown as fact, not estimate; only the weekly cap remains an estimate, with remaining
+  headroom shown (§6.5).
+- `dayFlags` render as a badge (`stream` shows `prime` on Tuesday, `early` on Mon/Thu/Sat/Sun).
+  No scoring effect.
+- Roster membership is **visibility only** — weekly quota and target counts include completions
+  made on any weekday.
+- Progress chips: `gym 3/5`, `stream 2/4`, `jobs 0/1`.
+- Bonus tasks are **locked-but-tappable** before the day's first anchor: a dashed tile with a
+  `LOCKED` badge and the reason on it ("settles at 0 until an anchor lands"), above a notice
+  explaining that the tap is still recorded and pays in full once an anchor arrives. The
+  section heading carries the remaining weekly bonus headroom.
+- Weight/tracker taps open a numeric-keypad input for the value.
+- `chore` taps open the pool picker (Clean room / Fold clothes / …).
+
+**Shop** — tiles with cost and affordability judged on the **settled** balance; items reachable
+only with pending points stay disabled but say so (§8.2); cooled-down items visibly disabled
+with remaining time; a blocking note while the balance is negative.
+
+**Failure log** — open entries only, **grouped on `(taskId, penalty, actualDeduction)`**:
+matching entries collapse into one row reading `Pray ×4 · −40`, sorted by **`actualDeduction`
+descending** — by what a skip actually returns, so the top row is always the most valuable
+redemption. `actualDeduction` is part of the key, not just the sort: two misses of the same
+task can differ once the floor has clamped one, and every row inside a group must be
+interchangeable when a skip is spent against one of them. A task whose entries straddle the
+floor therefore shows as two rows (`Pray ×3 · −30` and `Pray ×1 · −5`), which is the honest
+rendering. Each row shows both `penalty` and `actualDeduction`, and a **Spend skip** action
+that redeems **one** entry from the group with a confirm step. Grouping is not cosmetic: with
+three daily tasks a bad week yields 21+ entries against 5 free skips, and an ungrouped list
+would be unusable. Missed weekly targets appear in a separate **"Bonus missed"** section — not
+failures, not skip-redeemable.
+
+**History** — completions by week, weight chart, running balance line (both inline SVG, no
+library), expired/redeemed failure history, redemption log, and **Export all data as JSON** —
+a day-one feature that dumps every completion, failure, redemption, skip, and weight entry ever
+recorded, plus the `state` row and the config snapshot in use, via a `Blob` + share/download.
+
+---
+
+## 12. Dev tool — week simulator (`js/devtools/weekSimulator.js`)
+
+A command-line tool that builds an in-memory world, replays a hypothetical week through the
+**same pure engine** the app uses — day closes, week close and all — and prints the result:
+
+```
+$ node js/devtools/weekSimulator.js              # the built-in example
+$ node js/devtools/weekSimulator.js lazy.json    # your own scenario
+$ node js/devtools/weekSimulator.js --week 2026-09-07 lazy.json
+
+Week 2026-09-07 → 2026-09-14
+  earned        +150   (quota 30, daily 120)
+  penalties     -310   (jobs x3, weight x3, pray x3, class x4, gym x3, content x5)
+  bonus         +0     (cap 120, headroom left 120)
+  missed        Stream 0/4 (forfeited 40), Study for Classes 0/5 (forfeited 30)
+  multiplier    ended no tier 1x on a 1-day streak
+  NET           -160   balance 0 → -160
+```
+
+A scenario is a terse `{ "mon": ["gym", "jobs", "stream"], "tue": [...] }` map; an entry may be
+an object for repeats or values — `{ "task": "chore", "times": 3 }`,
+`{ "task": "weight", "value": 183.2 }`. Retuning `config.json` and re-running takes seconds
+instead of a week. `simulateWeek()` and `formatReport()` are exported separately, so the numbers
+are testable without parsing the printout, and because it calls `scoring.js` directly it cannot
+drift from what the app actually does.
+
+---
+
+## Review checklist
+
+All previously open questions are resolved (§9.1–9.4). Nothing is blocking; the two standing
+notes (§9.5, §9.6) are informational. Ready to build on approval.

@@ -1,0 +1,247 @@
+/* Tracker — stage 5 visual pass.
+   Loaded after style.css. Everything here either raises the motivational
+   surface (tier, balance, tap feedback) or serves the new Info tab. Nothing
+   here makes a tap take longer: targets, spacing and hit areas are unchanged
+   or larger, and every animation is short and non-blocking. */
+
+:root {
+  --flow: #4ac0d9;
+  --cook: #f0883e;
+  --burn: #ff5c39;
+}
+
+/* ---------- the balance is the thing I look at most ---------- */
+
+.hdr-balance {
+  font-size: 44px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(180deg, #ffffff 0%, #b9c6d4 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.hdr-balance.is-negative {
+  background: none;
+  -webkit-text-fill-color: var(--bad);
+  color: var(--bad);
+}
+.hdr-unit { font-size: 14px; }
+
+/* ---------- the streak tier, escalating ---------- */
+
+.hdr-tier {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px 3px 8px; border-radius: 999px;
+  font-weight: 700; font-size: 12.5px; letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+.hdr-tier-flame { font-size: 10px; line-height: 1; }
+.hdr-tier.tier-none { color: var(--dim); border-color: var(--line); }
+.hdr-tier.tier-flowing {
+  color: #d7f4fb;
+  border-color: rgba(74, 192, 217, 0.5);
+  background: rgba(74, 192, 217, 0.14);
+}
+.hdr-tier.tier-cooking {
+  color: #ffd9b0;
+  border-color: rgba(240, 136, 62, 0.6);
+  background: rgba(240, 136, 62, 0.18);
+  box-shadow: 0 0 12px rgba(240, 136, 62, 0.25);
+}
+.hdr-tier.tier-burning {
+  color: #fff1e8;
+  border-color: rgba(255, 92, 57, 0.85);
+  background: linear-gradient(100deg, rgba(255, 92, 57, 0.32), rgba(240, 136, 62, 0.32));
+  box-shadow: 0 0 18px rgba(255, 92, 57, 0.45);
+  animation: emberPulse 2.4s ease-in-out infinite;
+}
+@keyframes emberPulse {
+  0%, 100% { box-shadow: 0 0 14px rgba(255, 92, 57, 0.35); }
+  50%      { box-shadow: 0 0 22px rgba(255, 92, 57, 0.60); }
+}
+.hdr-streak { font-weight: 600; color: var(--text); }
+.hdr-next { color: var(--dim); }
+
+/* ---------- completing a task should feel like something ---------- */
+
+.tile { position: relative; overflow: hidden; transition: transform 120ms ease, background 120ms ease; }
+.tile:active { transform: scale(0.985); }
+.tile.is-tapped { animation: tapPop 260ms ease-out; }
+@keyframes tapPop {
+  0%   { transform: scale(0.97); background: rgba(63, 185, 80, 0.22); }
+  60%  { transform: scale(1.008); background: rgba(63, 185, 80, 0.10); }
+  100% { transform: scale(1); }
+}
+.fly {
+  position: absolute; right: 16px; top: 50%;
+  font-size: 21px; font-weight: 800; color: var(--good);
+  pointer-events: none;
+  animation: flyUp 700ms cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+@keyframes flyUp {
+  0%   { opacity: 0; transform: translateY(0) scale(0.9); }
+  25%  { opacity: 1; transform: translateY(-14px) scale(1.15); }
+  100% { opacity: 0; transform: translateY(-46px) scale(1); }
+}
+
+/* ---------- progress you can read mid-set ---------- */
+
+.bar {
+  height: 6px; margin-top: 9px; border-radius: 3px;
+  background: #0c1219; border: 1px solid var(--line); overflow: hidden;
+}
+.bar > i {
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), #7cc4ff);
+  transition: width 240ms ease;
+}
+.bar.is-met > i { background: linear-gradient(90deg, var(--good), #6ee787); }
+
+/* ---------- locked, not broken ---------- */
+
+.tile.is-locked {
+  border-style: dashed;
+  border-color: rgba(217, 164, 65, 0.55);
+  background:
+    repeating-linear-gradient(135deg, rgba(217, 164, 65, 0.05) 0 10px, transparent 10px 20px),
+    var(--surface);
+}
+.tile.is-locked .tile-pts { color: var(--warn); opacity: 0.9; }
+
+/* ---------- undo ---------- */
+
+.tile-group { margin-bottom: 10px; }
+.tile-group .tile { margin-bottom: 0; }
+.undo-row { display: flex; justify-content: flex-end; margin: 0 2px; }
+.undo-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 40px; padding: 0 14px;
+  border: 1px solid var(--line); border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: var(--surface-2); color: var(--muted);
+  font-size: 13px; font-weight: 600;
+}
+.undo-btn:active { background: #232c38; color: var(--text); }
+.undo-icon { font-size: 14px; line-height: 1; }
+
+/* ---------- a debt to clear, not a shame list ---------- */
+
+.fail-row { align-items: center; }
+.fail-row .btn {
+  background: linear-gradient(180deg, #6cb6ff, var(--accent));
+  box-shadow: 0 2px 10px rgba(88, 166, 255, 0.25);
+  min-height: 46px; padding: 0 18px;
+}
+.fail-label { font-size: 16px; }
+.fail-cost { color: #c98b80; font-weight: 600; }
+.fail-nums { font-size: 12.5px; }
+
+/* ---------- info tab ---------- */
+
+.schedule-shot {
+  display: block; width: 100%; padding: 0; margin-bottom: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  overflow: hidden; background: var(--surface);
+}
+.schedule-shot img { display: block; width: 100%; height: auto; }
+
+.gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+@media (min-width: 560px) { .gallery { grid-template-columns: repeat(3, 1fr); } }
+.gallery-cell {
+  position: relative; padding: 0; aspect-ratio: 1 / 1;
+  border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+  background: var(--surface-2);
+}
+.gallery-cell img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+  transition: transform 200ms ease;
+}
+.gallery-cell:active img { transform: scale(1.04); }
+
+.ref-list { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.ref-row { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.ref-row:last-child { border-bottom: 0; }
+.ref-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ref-name { font-size: 16px; font-weight: 600; color: var(--text); }
+.ref-days { margin-top: 3px; font-size: 12px; color: var(--dim); }
+.ref-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.ref-stat {
+  flex: 1 1 auto; min-width: 74px; padding: 6px 8px;
+  border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line);
+  text-align: center;
+}
+.ref-stat-v {
+  display: block; font-size: 16px; font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--text);
+}
+.ref-stat-v.pos { color: var(--good); }
+.ref-stat-v.neg { color: var(--bad); }
+.ref-stat-v.muted { color: var(--dim); font-weight: 600; }
+.ref-stat-k {
+  display: block; margin-top: 1px;
+  font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim);
+}
+
+.prose { margin: 8px 0 0; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.tier-ladder { display: flex; gap: 8px; margin-top: 12px; }
+.tier-step {
+  flex: 1; padding: 10px 8px; border-radius: 10px; text-align: center;
+  border: 1px solid var(--line); background: var(--surface-2);
+}
+.tier-step .tier-name { display: block; font-weight: 700; font-size: 13px; }
+.tier-step .tier-mult { display: block; font-size: 18px; font-weight: 800; margin: 2px 0; }
+.tier-step .tier-at { display: block; font-size: 11px; color: var(--dim); }
+.tier-step.tier-flowing { border-color: rgba(74, 192, 217, 0.45); }
+.tier-step.tier-flowing .tier-name,
+.tier-step.tier-flowing .tier-mult { color: var(--flow); }
+.tier-step.tier-cooking { border-color: rgba(240, 136, 62, 0.5); }
+.tier-step.tier-cooking .tier-name,
+.tier-step.tier-cooking .tier-mult { color: var(--cook); }
+.tier-step.tier-burning { border-color: rgba(255, 92, 57, 0.6); }
+.tier-step.tier-burning .tier-name,
+.tier-step.tier-burning .tier-mult { color: var(--burn); }
+
+/* ---------- lightbox ---------- */
+
+.lightbox {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+}
+.lightbox-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.94); }
+.lightbox-img {
+  position: relative; max-width: 100vw; max-height: 100vh;
+  object-fit: contain; touch-action: pinch-zoom;
+  transition: transform 200ms ease;
+}
+.lightbox-close {
+  position: absolute; top: calc(var(--safe-top) + 8px); right: 8px;
+  width: 46px; height: 46px; border-radius: 50%; font-size: 18px;
+  background: rgba(22, 27, 34, 0.85); color: var(--text);
+}
+.lightbox-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 46px; height: 72px; font-size: 30px; line-height: 1;
+  background: rgba(22, 27, 34, 0.6); color: var(--text);
+}
+.lightbox-nav.prev { left: 0; border-radius: 0 10px 10px 0; }
+.lightbox-nav.next { right: 0; border-radius: 10px 0 0 10px; }
+.lightbox-caption {
+  position: absolute; bottom: calc(var(--safe-bottom) + 14px); left: 0; right: 0;
+  text-align: center; font-size: 13px; color: var(--muted);
+}
+
+/* ---------- five tabs need a little more room ---------- */
+
+.tab { font-size: 10.5px; }
+.tab-badge { right: 16%; }
+
+/* Motion is decoration; never a prerequisite for using the app. */
+@media (prefers-reduced-motion: reduce) {
+  .tile.is-tapped,
+  .hdr-tier.tier-burning { animation: none; }
+  .fly { animation: none; opacity: 0; }
+  .lightbox-img, .gallery-cell img, .bar > i { transition: none; }
+}

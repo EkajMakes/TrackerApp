@@ -12,6 +12,7 @@
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
 <link rel="icon" href="./icons/icon-192.png">
 <link rel="stylesheet" href="./css/style.css">
+<link rel="stylesheet" href="./css/stage5.css">
 </head>
 <body>
 
@@ -25,6 +26,7 @@
     <section id="view-today"    class="view"></section>
     <section id="view-shop"     class="view" hidden></section>
     <section id="view-failures" class="view" hidden></section>
+    <section id="view-info"     class="view" hidden></section>
     <section id="view-history"  class="view" hidden></section>
   </main>
 
@@ -32,6 +34,7 @@
     <button class="tab is-active" data-tab="today"    type="button"><span class="tab-i">✓</span>Today</button>
     <button class="tab"           data-tab="shop"     type="button"><span class="tab-i">★</span>Shop</button>
     <button class="tab"           data-tab="failures" type="button"><span class="tab-i">!</span>Failures<span class="tab-badge" id="tab-badge" hidden></span></button>
+    <button class="tab"           data-tab="info"     type="button"><span class="tab-i">☰</span>Info</button>
     <button class="tab"           data-tab="history"  type="button"><span class="tab-i">▤</span>History</button>
   </nav>
 </div>
@@ -44,6 +47,17 @@
     <div id="sheet-body" class="sheet-body"></div>
     <button class="btn btn-ghost" type="button" data-close>Cancel</button>
   </div>
+</div>
+
+<!-- Full-size image viewer for the Info tab: tap to close, swipe or arrows to
+     move between images, double-tap to zoom. -->
+<div id="lightbox" class="lightbox" hidden>
+  <div class="lightbox-backdrop" data-close></div>
+  <img id="lightbox-img" class="lightbox-img" alt="">
+  <button class="lightbox-close" type="button" data-close aria-label="Close">✕</button>
+  <button class="lightbox-nav prev" type="button" data-prev aria-label="Previous">‹</button>
+  <button class="lightbox-nav next" type="button" data-next aria-label="Next">›</button>
+  <div id="lightbox-caption" class="lightbox-caption"></div>
 </div>
 
 <div id="toast" class="toast" hidden></div>

@@ -4,11 +4,12 @@
   "dayBoundary": { "hour": 2, "timezone": "America/Chicago" },
   "weekStart": "monday",
 
-  "balanceFloor": -250,
+  "balanceFloor": -500,
   "bonusWeeklyCap": 120,
   "bonusRequiresAnchor": true,
   "skipsPerWeek": 5,
   "skipsRollOver": false,
+  "undosPerDay": 3,
 
   "tasks": {
     "class": {
@@ -38,6 +39,15 @@
       "days": "all",
       "anchor": true,
       "extraEarnsPoints": true
+    },
+    "certs": {
+      "label": "Study for Certifications",
+      "type": "daily",
+      "dailyTarget": 1,
+      "points": 12,
+      "penalty": 12,
+      "days": "all",
+      "anchor": true
     },
     "pray": {
       "label": "Pray",
@@ -148,7 +158,9 @@
   },
 
   "shop": [
+    { "name": "Takis", "cost": 60, "cooldownDays": 1 },
     { "name": "Medium Coke or Sprite", "cost": 80, "cooldownDays": 2 },
+    { "name": "Gooning", "cost": 100, "cooldownDays": 2 },
     { "name": "McChicken", "cost": 120, "cooldownDays": 3 },
     { "name": "Hour of Laziness", "cost": 150, "cooldownDays": 2 },
     { "name": "Big Mac", "cost": 200, "cooldownDays": 4 },

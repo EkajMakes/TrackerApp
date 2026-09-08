@@ -28,11 +28,19 @@ export function renderHeader(root, header) {
   root.append(row);
 
   const sub = el('div', 'hdr-sub');
-  sub.append(
-    el('span', 'hdr-tier', header.tierName ? `${header.tierName} ${header.multiplier}x` : 'No tier — 1x'),
-    el('span', null, `${header.streak}-day streak`),
-    el('span', null, `${header.skipsAvailable} skip${header.skipsAvailable === 1 ? '' : 's'}`),
-  );
+  // The tier is the main motivational surface: each one looks distinctly
+  // hotter than the last, and "no tier" reads as unlit rather than broken.
+  const tierClass = header.tierName ? `tier-${header.tierName.toLowerCase()}` : 'tier-none';
+  const tier = el('span', `hdr-tier ${tierClass}`);
+  tier.append(el('span', 'hdr-tier-flame', header.tierName ? '◆' : '◇'));
+  tier.append(el('span', null, header.tierName ? `${header.tierName} ${header.multiplier}x` : 'No tier'));
+  sub.append(tier);
+  sub.append(el('span', 'hdr-streak', `${header.streak}-day streak`));
+  sub.append(el('span', null, `${header.skipsAvailable} skip${header.skipsAvailable === 1 ? '' : 's'}`));
+  if (header.nextTier) {
+    sub.append(el('span', 'hdr-next',
+      `${header.nextTier.daysAway}d → ${header.nextTier.name}`));
+  }
   root.append(sub);
 
   if (count > 0 && locked) {
@@ -51,6 +59,9 @@ function progressLine(task) {
   if (!task.progress) return null;
   const { done, target, scope } = task.progress;
   const noun = scope === 'week' ? 'this week' : scope === 'cap' ? 'today (cap)' : 'today';
+  const left = target - done;
+  // How many are LEFT reads faster than a fraction when you are mid-set.
+  if (left > 0 && scope !== 'cap') return `${done}/${target} ${noun} · ${left} to go`;
   return `${done}/${target} ${noun}`;
 }
 
@@ -93,8 +104,37 @@ function tile(task, actions) {
   node.append(main, pts);
   // Locked bonus tiles stay TAPPABLE — the completion is still recorded.
   node.disabled = task.disabled;
-  node.addEventListener('click', () => actions.complete(task));
+  node.addEventListener('click', () => {
+    // Under 300ms, and purely decorative: the action fires regardless.
+    node.classList.remove('is-tapped');
+    void node.offsetWidth;
+    node.classList.add('is-tapped');
+    if (task.awardNow > 0) flyPoints(node, signed(task.awardNow));
+    actions.complete(task);
+  });
   return node;
+}
+
+/** The points landing, briefly, where the tap happened. */
+function flyPoints(tile, text) {
+  const chip = el('span', 'fly', text);
+  tile.append(chip);
+  setTimeout(() => chip.remove(), 700);
+}
+
+/** Undo control: only present while the undo is genuinely available. */
+function undoRow(task, undosRemaining, actions) {
+  const row = el('div', 'undo-row');
+  const btn = el('button', 'undo-btn');
+  btn.type = 'button';
+  btn.append(el('span', 'undo-icon', '↩'));
+  btn.append(el('span', null, `undo · ${undosRemaining} left`));
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    actions.undo(task.undoable);
+  });
+  row.append(btn);
+  return row;
 }
 
 export function renderToday(root, view, actions) {
@@ -132,7 +172,16 @@ export function renderToday(root, view, actions) {
     if (!tasks || !tasks.length) continue;
     any = true;
     root.append(el('h2', 'sec', heading[type]));
-    for (const task of tasks) root.append(tile(task, actions));
+    for (const task of tasks) {
+      const group = el('div', 'tile-group');
+      group.append(tile(task, actions));
+      // Once the day's allowance is spent the control disappears entirely
+      // rather than sitting there disabled.
+      if (task.undoable && today.undosRemaining > 0) {
+        group.append(undoRow(task, today.undosRemaining, actions));
+      }
+      root.append(group);
+    }
   }
   if (!any) root.append(empty('Nothing rostered for today.'));
 }

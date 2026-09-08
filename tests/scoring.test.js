@@ -149,7 +149,8 @@ test('daily misses are written per dailyTarget shortfall', () => {
 test('a skip refunds actualDeduction, not the configured penalty', () => {
   const c = onlyTasks(['pray']);
   let w = freshWorld(WEEK1, c);
-  w.state.balance = -240; // floor is -250; the next 10-point miss only costs 10
+  // One 10-point miss above the floor, whatever the floor is retuned to.
+  w.state.balance = c.balanceFloor + 10;
   w = rollover(w, at('2026-09-09', 3, 0, c), c); // two days missed
 
   const [first, second] = w.failures;
@@ -157,16 +158,16 @@ test('a skip refunds actualDeduction, not the configured penalty', () => {
   assert.equal(first.actualDeduction, 10, 'the first miss really cost 10');
   assert.equal(second.penalty, 10);
   assert.equal(second.actualDeduction, 0, 'the floor absorbed the second one entirely');
-  assert.equal(w.state.balance, -250);
+  assert.equal(w.state.balance, c.balanceFloor);
 
   const clamped = spendSkip(w, second.id, at('2026-09-09', 9, 0, c));
   assert.equal(clamped.ok, true);
   assert.equal(clamped.refunded, 0, 'refunding the config penalty here would mint free points');
-  assert.equal(clamped.world.state.balance, -250);
+  assert.equal(clamped.world.state.balance, c.balanceFloor);
 
   const real = spendSkip(clamped.world, first.id, at('2026-09-09', 10, 0, c));
   assert.equal(real.refunded, 10);
-  assert.equal(real.world.state.balance, -240);
+  assert.equal(real.world.state.balance, c.balanceFloor + 10);
 });
 
 test('the skip guard rejects a resolved or expired failure as a complete no-op', () => {
@@ -287,7 +288,7 @@ test('pending is gate-aware', () => {
 test('failures group on (taskId, penalty, actualDeduction) and sort by refund value', () => {
   const c = onlyTasks(['pray']);
   let w = freshWorld(WEEK1, c);
-  w.state.balance = -240; // the floor will clamp the second miss to 0
+  w.state.balance = c.balanceFloor + 10; // the floor will clamp the second miss to 0
   w = rollover(w, at('2026-09-10', 3, 0, c), c); // three days missed
 
   const groups = groupedFailures(w);

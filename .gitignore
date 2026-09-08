@@ -5,6 +5,12 @@ node_modules/
 # browser is pointed at, and this repo is public. Never commit one.
 tracker-export-*.json
 
+# personal photographs — this repo is public. The gallery reads whatever is in
+# assets/motivation/ on the device that builds it; the images themselves are
+# deliberately not published. assets/manifest.json is still tracked so the app
+# has an index, and a missing file simply renders no gallery.
+assets/motivation/
+
 # local browser profiles and scratch output from driving the app
 chrome-profile*/
 chrome-sw/

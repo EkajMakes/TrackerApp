@@ -15,11 +15,13 @@ import {
   openTracker,
   redeemItemAction,
   spendSkipAction,
+  undoAction,
   viewOf,
 } from './rollover.js';
 import { renderHeader, renderToday } from './ui/today.js';
 import { renderShop } from './ui/shop.js';
 import { renderFailures } from './ui/failures.js';
+import { initLightbox, renderInfo } from './ui/info.js';
 import { renderHistory } from './ui/history.js';
 
 const els = {
@@ -32,16 +34,19 @@ const els = {
   sheetTitle: document.getElementById('sheet-title'),
   sheetBody: document.getElementById('sheet-body'),
   toast: document.getElementById('toast'),
+  lightbox: document.getElementById('lightbox'),
   views: {
     today: document.getElementById('view-today'),
     shop: document.getElementById('view-shop'),
     failures: document.getElementById('view-failures'),
+    info: document.getElementById('view-info'),
     history: document.getElementById('view-history'),
   },
 };
 
 let cfg = null;
 let db = null;
+let assets = { sections: { schedule: [], motivation: [] } };
 let tab = 'today';
 let toastTimer = null;
 
@@ -115,6 +120,7 @@ function paint(view) {
   if (tab === 'today') renderToday(els.views.today, view, actions);
   if (tab === 'shop') renderShop(els.views.shop, view, actions);
   if (tab === 'failures') renderFailures(els.views.failures, view, actions);
+  if (tab === 'info') renderInfo(els.views.info, view, actions, assets);
   if (tab === 'history') renderHistory(els.views.history, view, actions);
 
   const open = view.failures.groups.reduce((sum, g) => sum + g.count, 0);
@@ -163,6 +169,23 @@ const actions = {
     paint(viewOf(res.world, cfg, now()));
   },
 
+  async undo(undoable) {
+    const res = await undoAction(db, cfg, now(), undoable.id);
+    if (!res.ok) {
+      const why = {
+        'no-undos-left': 'No undos left today',
+        'day-closed': 'That day has already settled',
+        'already-voided': 'Already undone',
+      }[res.reason] ?? `Cannot undo: ${res.reason}`;
+      toast(why, true);
+      return void paint(viewOf(res.world, cfg, now()));
+    }
+    toast(res.refunded > 0
+      ? `${undoable.label} undone · −${res.refunded}`
+      : `${undoable.label} undone`);
+    paint(viewOf(res.world, cfg, now()));
+  },
+
   async spendSkip(group) {
     const [failureId] = group.ids; // rows in a group are interchangeable
     const res = await spendSkipAction(db, cfg, now(), failureId);
@@ -204,10 +227,26 @@ const actions = {
 
 /* ---------------- boot ---------------- */
 
+/** The image index written by `npm run assets`. Absent is not an error. */
+async function loadAssets() {
+  try {
+    const res = await fetch('./assets/manifest.json');
+    if (!res.ok) return assets;
+    const parsed = await res.json();
+    if (parsed?.sections) return parsed;
+  } catch {
+    // Offline before the manifest was ever cached, or none generated yet.
+  }
+  return assets;
+}
+
 async function boot() {
   cfg = await loadConfig((...args) => fetch(...args));
+  assets = await loadAssets();
   const opened = await openTracker(indexedDB, cfg, now());
   db = opened.db;
+
+  initLightbox(els.lightbox);
 
   els.tabs.addEventListener('click', (e) => {
     const btn = e.target.closest('.tab');

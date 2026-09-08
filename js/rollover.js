@@ -27,6 +27,7 @@ import {
   redeemItem,
   rollover as settleForward,
   spendSkip,
+  undoCompletion,
 } from './scoring.js';
 
 /**
@@ -82,6 +83,15 @@ export function completeTaskAction(db, cfg, nowMs, entry) {
 
 export function spendSkipAction(db, cfg, nowMs, failureId) {
   return withRollover(db, cfg, nowMs, (world) => spendSkip(world, failureId, nowMs));
+}
+
+/**
+ * Undo a completion tapped by mistake. Goes through withRollover like every
+ * other action, which also means a day that has just closed settles FIRST and
+ * the undo is then correctly refused as same-day-only.
+ */
+export function undoAction(db, cfg, nowMs, completionId) {
+  return withRollover(db, cfg, nowMs, (world) => undoCompletion(world, completionId, nowMs, cfg));
 }
 
 export function redeemItemAction(db, cfg, nowMs, itemName) {

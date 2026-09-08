@@ -12,6 +12,7 @@ import {
   redeemItemAction,
   runRollover,
   spendSkipAction,
+  undoAction,
 } from '../js/rollover.js';
 import { at, cfg } from './helpers.js';
 
@@ -253,4 +254,30 @@ test('inspectImport reports without writing, and a fresh restore needs no confir
   assert.equal(await loadWorld(fresh), null, 'inspecting wrote nothing');
 
   assert.ok(await importTracker(fresh, dump) > 0);
+});
+
+test('the export includes voided completions', async () => {
+  const factory = new IDBFactory();
+  const { db } = await openTracker(factory, cfg, at('2026-09-07', 7), { name: 'export-voided' });
+
+  await completeTaskAction(db, cfg, at('2026-09-07', 9), { taskId: 'jobs' });
+  const kept = await completeTaskAction(db, cfg, at('2026-09-07', 10), { taskId: 'gym' });
+  const mistake = await completeTaskAction(db, cfg, at('2026-09-07', 11), { taskId: 'gym' });
+
+  const undone = await undoAction(db, cfg, at('2026-09-07', 12), mistake.completion.id);
+  assert.equal(undone.ok, true);
+
+  const dump = await exportTracker(db, cfg, at('2026-09-07', 13));
+  const voided = dump.completions.find((c) => c.id === mistake.completion.id);
+
+  assert.ok(voided, 'a voided completion is still in the export — undo marks, never deletes');
+  assert.ok(voided.voidedAt > 0);
+  assert.equal(voided.voidedRefund, mistake.completion.pointsAwarded);
+  assert.equal(voided.pointsAwarded, mistake.completion.pointsAwarded, 'what it paid at the time');
+
+  // ...alongside the live ones, distinguishable by the field alone.
+  const live = dump.completions.filter((c) => !c.voidedAt);
+  assert.equal(live.length, 2);
+  assert.ok(live.some((c) => c.id === kept.completion.id));
+  assert.equal(dump.completions.length, 3, 'every tap ever made is present');
 });

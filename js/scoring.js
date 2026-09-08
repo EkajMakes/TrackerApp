@@ -77,14 +77,25 @@ function replaceById(list, id, patch) {
  * Ledger queries — every count is derived, nothing is denormalised    *
  * ------------------------------------------------------------------ */
 
+/**
+ * A voided completion — undone as a misclick — counts for NOTHING: not quota,
+ * not dailyTarget, not bonus headroom, not anchor status, not the streak. It
+ * stays in the ledger and in the export regardless; undo marks, never deletes.
+ * Every count below goes through this filter, which is why there is no way to
+ * forget it in one place and not another.
+ */
+export const isLive = (c) => !c.voidedAt;
+
+export const liveCompletions = (world) => world.completions.filter(isLive);
+
 export const completionsOnDay = (world, appDate) =>
-  world.completions.filter((c) => c.appDate === appDate);
+  world.completions.filter((c) => isLive(c) && c.appDate === appDate);
 
 export const completionsOfTaskOnDay = (world, taskId, appDate) =>
-  world.completions.filter((c) => c.taskId === taskId && c.appDate === appDate);
+  world.completions.filter((c) => isLive(c) && c.taskId === taskId && c.appDate === appDate);
 
 export const completionsOfTaskInWeek = (world, taskId, weekKey) =>
-  world.completions.filter((c) => c.taskId === taskId && c.weekKey === weekKey);
+  world.completions.filter((c) => isLive(c) && c.taskId === taskId && c.weekKey === weekKey);
 
 export const openFailures = (world) => world.failures.filter((f) => f.resolvedAt === null);
 
@@ -99,7 +110,7 @@ export function anchoredOn(world, appDate, cfg) {
 /** Bonus points already banked in a week — drives the weekly cap headroom. */
 export function bonusPointsAwardedInWeek(world, weekKey, cfg) {
   return world.completions
-    .filter((c) => c.weekKey === weekKey && cfg.tasks[c.taskId]?.type === 'bonus')
+    .filter((c) => isLive(c) && c.weekKey === weekKey && cfg.tasks[c.taskId]?.type === 'bonus')
     .reduce((sum, c) => sum + (c.pointsAwarded ?? 0), 0);
 }
 
@@ -216,12 +227,87 @@ export function completeTask(world, { taskId, timestamp, value = null, poolLabel
     value,
     unit: task.unit ?? null,
     poolLabel,
+    voidedAt: null,
+    voidedRefund: null,
   };
 
   const next = clone(world);
   next.completions = [...next.completions, completion];
   if (pointsAwarded) credit(next, pointsAwarded);
   return { ok: true, world: next, completion };
+}
+
+/* ------------------------------------------------------------------ *
+ * Undo — a misclick correction, deliberately small                    *
+ * ------------------------------------------------------------------ */
+
+/**
+ * How many undos are left today.
+ *
+ * Derived from the ledger like everything else: undo is same-app-day only, so
+ * the voided completions bearing today's appDate ARE today's undos. There is
+ * no counter to drift, and the allowance resets at the day boundary for free
+ * because tomorrow's appDate matches nothing voided today.
+ */
+export function undosUsedOn(world, appDate) {
+  return world.completions.filter((c) => c.voidedAt && c.appDate === appDate).length;
+}
+
+export function undosRemaining(world, nowMs, cfg) {
+  return Math.max(0, (cfg.undosPerDay ?? 0) - undosUsedOn(world, appDateOf(nowMs, cfg)));
+}
+
+/** Why a completion cannot be undone right now, or null if it can. */
+export function undoBlockedReason(world, completion, nowMs, cfg) {
+  if (!completion) return 'not-found';
+  if (completion.voidedAt) return 'already-voided';
+
+  const today = appDateOf(nowMs, cfg);
+  // Same app-day only. Once the boundary has settled the day, the completion
+  // has already fed penalties, the streak and bonus settlement — reopening it
+  // would mean rescoring a closed day, which nothing in this app ever does.
+  if (completion.appDate !== today) return 'day-closed';
+  if (world.state.lastSettledAppDate && completion.appDate <= world.state.lastSettledAppDate) {
+    return 'day-closed';
+  }
+  if (undosRemaining(world, nowMs, cfg) <= 0) return 'no-undos-left';
+  return null;
+}
+
+/**
+ * Undo a completion tapped by mistake.
+ *
+ * Writes `voidedAt` — never deletes — and takes back exactly what was awarded,
+ * read off the record rather than recomputed from config, so a mid-week retune
+ * cannot make an undo refund a different number than the tap paid. An unsettled
+ * bonus (`pointsAwarded === null`) banked nothing, so it returns nothing; its
+ * points simply flow back into the day's headroom by no longer counting.
+ *
+ * Rejections are complete no-ops and return the SAME world object.
+ */
+export function undoCompletion(world, completionId, nowMs, cfg) {
+  const completion = world.completions.find((c) => c.id === completionId);
+  const blocked = undoBlockedReason(world, completion, nowMs, cfg);
+  if (blocked) return { ok: false, reason: blocked, world };
+
+  const refund = completion.pointsAwarded ?? 0;
+  if (refund < 0) {
+    throw new Error(`refusing to undo ${completionId}: pointsAwarded is negative (${refund})`);
+  }
+
+  const next = clone(world);
+  next.completions = replaceById(next.completions, completion.id, {
+    voidedAt: nowMs,
+    voidedRefund: refund,
+  });
+  next.state.balance -= refund;
+
+  // Undo can only ever return the balance to where it stood before the tap —
+  // never above it, whatever the tier is doing now.
+  if (next.state.balance > world.state.balance) {
+    throw new Error('undo raised the balance; refusing to persist a scoring error');
+  }
+  return { ok: true, world: next, refunded: refund, completion: next.completions.find((c) => c.id === completion.id) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -443,6 +529,8 @@ export function settleDayClose(world, closingAppDate, boundaryInstant, cfg) {
             value: null,
             unit: null,
             poolLabel: null,
+            voidedAt: null,
+            voidedRefund: null,
           },
         ];
         credit(next, pts);

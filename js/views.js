@@ -20,10 +20,14 @@ import {
   completionsOfTaskInWeek,
   completionsOfTaskOnDay,
   groupedFailures,
+  isLive,
   pendingSummary,
   shopState,
   tierFor,
+  undoBlockedReason,
+  undosRemaining,
 } from './scoring.js';
+import { dailyTargetOf as dailyTargetFor } from './config.js';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAY_LABEL = {
@@ -83,10 +87,13 @@ export function todayView(world, nowMs, cfg) {
   const anchored = anchoredOn(world, appDate, cfg);
   const locked = cfg.bonusRequiresAnchor && !anchored;
 
+  const undosLeft = undosRemaining(world, nowMs, cfg);
+
   const tasks = taskList(cfg)
     .filter((task) => isRostered(task, weekday))
     .map((task) => {
-      const doneToday = completionsOfTaskOnDay(world, task.id, appDate).length;
+      const todaysCompletions = completionsOfTaskOnDay(world, task.id, appDate);
+      const doneToday = todaysCompletions.length;
       const doneThisWeek = completionsOfTaskInWeek(world, task.id, weekKey).length;
 
       let progress = null;
@@ -121,6 +128,14 @@ export function todayView(world, nowMs, cfg) {
         unit: task.unit ?? null,
         pool: task.pool ?? null,
         disabled: capReached,
+        // The most recent live completion is the one an undo would take back;
+        // the control only appears while that is actually possible.
+        undoable: (() => {
+          const latest = todaysCompletions.at(-1);
+          if (!latest) return null;
+          if (undoBlockedReason(world, latest, nowMs, cfg)) return null;
+          return { id: latest.id, pointsAwarded: latest.pointsAwarded, label: task.label };
+        })(),
       };
     });
 
@@ -134,6 +149,8 @@ export function todayView(world, nowMs, cfg) {
     pending: pendingSummary(world, nowMs, cfg),
     bonusHeadroom: bonusHeadroom(world, weekKey, cfg),
     bonusWeeklyCap: cfg.bonusWeeklyCap,
+    undosRemaining: undosLeft,
+    undosPerDay: cfg.undosPerDay ?? 0,
   };
 }
 
@@ -178,6 +195,8 @@ function balanceSeries(world) {
   const events = [];
   for (const c of world.completions) {
     if (c.pointsAwarded) events.push({ t: c.settledAt ?? c.timestamp, delta: c.pointsAwarded });
+    // An undo took its points back out at the moment it was voided.
+    if (c.voidedAt && c.voidedRefund) events.push({ t: c.voidedAt, delta: -c.voidedRefund });
   }
   for (const f of world.failures) {
     events.push({ t: f.createdAt, delta: -f.actualDeduction });
@@ -221,6 +240,7 @@ export function historyView(world, nowMs, cfg) {
   };
 
   for (const c of world.completions) {
+    if (!isLive(c)) continue; // undone taps are history, not counts
     const week = weekOf(c.weekKey);
     week.earned += c.pointsAwarded ?? 0;
     const row = week.tasks.get(c.taskId)
@@ -247,7 +267,7 @@ export function historyView(world, nowMs, cfg) {
 
   // --- weight: the recorded VALUE only, never a scoring signal -------------
   const weightEntries = world.completions
-    .filter((c) => c.value !== null && c.value !== undefined)
+    .filter((c) => isLive(c) && c.value !== null && c.value !== undefined)
     .sort((a, b) => a.timestamp - b.timestamp)
     .map((c) => ({ appDate: c.appDate, label: shortDate(c.appDate), value: c.value, unit: c.unit }));
   const weight = {
@@ -280,6 +300,64 @@ export function historyView(world, nowMs, cfg) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Info — a reference tab, read wholly from config                     *
+ * ------------------------------------------------------------------ */
+
+const TYPE_BLURB = {
+  quota: 'weekly target, penalised per unit short',
+  daily: 'due every day, penalised if missed',
+  target: 'weekly target, bonus if met, never penalised',
+  bonus: 'extra points, capped daily and weekly, never penalised',
+  tracker: 'records a value, never penalised',
+};
+
+/**
+ * The task table and the rules explainer. Every number here comes from
+ * config.json, so a retune is reflected without touching a line of code.
+ */
+export function infoView(cfg) {
+  const tasks = taskList(cfg).map((task) => ({
+    id: task.id,
+    label: task.label,
+    type: task.type,
+    typeBlurb: TYPE_BLURB[task.type] ?? task.type,
+    points: task.points,
+    penalty: task.penalty ?? null,
+    target:
+      task.type === 'quota' || task.type === 'target'
+        ? { value: task.target, scope: 'week' }
+        : task.type === 'daily'
+          ? { value: dailyTargetFor(task), scope: 'day' }
+          : task.type === 'bonus'
+            ? { value: task.dailyCap, scope: 'cap' }
+            : null,
+    targetBonus: task.targetBonus ?? null,
+    anchor: task.anchor === true,
+    days: task.days === 'all' ? 'every day' : task.days.join(' · '),
+    extraEarnsPoints: task.extraEarnsPoints === true,
+  }));
+
+  const anchors = tasks.filter((t) => t.anchor).map((t) => t.label);
+
+  return {
+    tasks,
+    anchors,
+    tiers: cfg.streak.tiers.map((t) => ({ ...t })),
+    rules: {
+      bonusRequiresAnchor: cfg.bonusRequiresAnchor,
+      bonusWeeklyCap: cfg.bonusWeeklyCap,
+      skipsPerWeek: cfg.skipsPerWeek,
+      skipsRollOver: cfg.skipsRollOver === true,
+      undosPerDay: cfg.undosPerDay ?? 0,
+      balanceFloor: cfg.balanceFloor,
+      boundaryHour: cfg.dayBoundary.hour,
+      timezone: cfg.dayBoundary.timezone,
+      weekStart: cfg.weekStart,
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * The whole screen, in one object                                     *
  * ------------------------------------------------------------------ */
 
@@ -290,6 +368,7 @@ export function buildView(world, nowMs, cfg) {
     today: todayView(world, nowMs, cfg),
     shop: shopView(world, nowMs, cfg),
     failures: failureView(world, nowMs, cfg),
+    info: infoView(cfg),
     history: historyView(world, nowMs, cfg),
   };
 }

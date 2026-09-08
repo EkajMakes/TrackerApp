@@ -75,6 +75,9 @@ export function validateConfig(raw) {
     fail('skipsPerWeek must be an integer >= 0');
   }
   if (typeof raw.bonusRequiresAnchor !== 'boolean') fail('bonusRequiresAnchor must be a boolean');
+  if (raw.undosPerDay !== undefined && (!Number.isInteger(raw.undosPerDay) || raw.undosPerDay < 0)) {
+    fail('undosPerDay must be an integer >= 0');
+  }
 
   // --- tasks ---------------------------------------------------------------
   const tasks = {};

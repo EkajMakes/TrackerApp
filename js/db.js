@@ -13,10 +13,11 @@
  */
 
 export const DB_NAME = 'habitTracker';
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 export const STATE_KEY = 'app';
+export const META_KEY = 'meta';
 
-/** The six stores, with the indexes each one needs. */
+/** The stores, with the indexes each one needs. */
 export const STORES = {
   completions: {
     keyPath: 'id',
@@ -35,18 +36,27 @@ export const STORES = {
     },
   },
   skips: { keyPath: 'id', indexes: { by_grantedWeekKey: 'grantedWeekKey' } },
-  redemptions: { keyPath: 'id', indexes: { by_itemName: 'itemName' } },
   missedTargets: { keyPath: 'id', indexes: { by_weekKey: 'weekKey' } },
+  // Rows rescued from features that have been cut. Cutting a feature is not
+  // permission to lose its history, so the v1 `redemptions` store was copied
+  // here before it was dropped (see migrateToV2).
+  archive: { keyPath: 'id', indexes: { by_store: 'store' } },
+  // Survives the reset wipe, which is the entire point of it: a reset counter
+  // erased by its own reset would be infinitely reusable.
+  meta: { keyPath: 'id', indexes: {} },
   state: { keyPath: 'id', indexes: {} },
 };
+
+/** Stores removed in a later version, kept here so upgrades stay readable. */
+export const RETIRED_STORES = ['redemptions'];
 
 /** Collections that make up a world, in the order the export lists them. */
 export const COLLECTIONS = [
   'completions',
   'failures',
   'skips',
-  'redemptions',
   'missedTargets',
+  'archive',
 ];
 
 /* ------------------------------------------------------------------ *
@@ -77,7 +87,7 @@ function transactionDone(tx) {
 export function openDatabase(factory, name = DB_NAME, version = DB_VERSION) {
   return new Promise((resolve, reject) => {
     const request = factory.open(name, version);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
       for (const [storeName, def] of Object.entries(STORES)) {
         const store = db.objectStoreNames.contains(storeName)
@@ -87,12 +97,45 @@ export function openDatabase(factory, name = DB_NAME, version = DB_VERSION) {
           if (!store.indexNames.contains(indexName)) store.createIndex(indexName, keyPath);
         }
       }
+      if (event.oldVersion > 0 && event.oldVersion < 2) {
+        migrateToV2(db, request.transaction);
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
     request.onblocked = () => reject(new Error('database upgrade blocked by another tab'));
   });
 }
+
+/**
+ * v1 → v2: the shop was cut, so the `redemptions` store goes.
+ *
+ * Every row is copied into `archive` FIRST, inside the same version-change
+ * transaction, and only then is the store dropped. Losing a feature must not
+ * lose its history — the export has always promised every redemption ever
+ * made, and that promise outlives the feature that created them.
+ */
+function migrateToV2(db, tx) {
+  if (!db.objectStoreNames.contains('redemptions')) return;
+
+  const source = tx.objectStore('redemptions');
+  const archive = tx.objectStore('archive');
+  const request = source.getAll();
+  request.onsuccess = () => {
+    for (const row of request.result ?? []) {
+      archive.put({
+        id: `archive:redemptions:${row.id}`,
+        store: 'redemptions',
+        archivedAt: Date.now(),
+        archivedBecause: 'the shop was removed in stage 6; points became a score',
+        row,
+      });
+    }
+    // Dropped only once the rows are safely copied.
+    db.deleteObjectStore('redemptions');
+  };
+}
+
 
 /* ------------------------------------------------------------------ *
  * Reading                                                             *
@@ -121,6 +164,30 @@ export async function loadWorld(db) {
   const { id, ...rest } = state;
   world.state = rest;
   return world;
+}
+
+/**
+ * The meta row — app-lifetime facts that must outlive a wipe.
+ *
+ * Deliberately NOT part of the world: the world is what a reset erases, and
+ * `resetsUsed` living there would mean the reset erases its own counter and
+ * can be used forever.
+ */
+export async function readMeta(db) {
+  const tx = db.transaction('meta', 'readonly');
+  const row = await requestToPromise(tx.objectStore('meta').get(META_KEY));
+  await transactionDone(tx);
+  return { resetsUsed: 0, ...(row ?? {}) };
+}
+
+export async function writeMeta(db, patch) {
+  const current = await readMeta(db);
+  const next = { ...current, ...patch, id: META_KEY };
+  const tx = db.transaction('meta', 'readwrite');
+  tx.objectStore('meta').put(next);
+  await transactionDone(tx);
+  const { id, ...rest } = next;
+  return rest;
 }
 
 /** Read one collection through an index — used by the History views. */
@@ -184,11 +251,12 @@ export async function seedWorld(db, world) {
  * Dump every store in full, read straight from the database.
  *
  * Day-one feature: every completion, failure (open, redeemed and expired),
- * redemption, skip (available, spent and lapsed), missed target and weight
- * entry ever recorded, plus the state row and the config in use.
+ * skip (available, spent and lapsed), missed target and weight entry ever
+ * recorded, plus `archive` (rows rescued from cut features, including every
+ * shop redemption ever made), `meta`, the state row, and the config in use.
  */
 export async function exportDatabase(db, cfg = null, exportedAt = null) {
-  const names = [...COLLECTIONS, 'state'];
+  const names = [...COLLECTIONS, 'meta', 'state'];
   const tx = db.transaction(names, 'readonly');
   const rows = await Promise.all(names.map((n) => requestToPromise(tx.objectStore(n).getAll())));
   await transactionDone(tx);
@@ -225,6 +293,8 @@ function newestInstant(source) {
     if (typeof v === 'number' && Number.isFinite(v) && (newest === null || v > newest)) newest = v;
   };
   for (const c of source.completions ?? []) { consider(c.timestamp); consider(c.settledAt); }
+  // v1 dumps still carry a redemptions array; its timestamps still count.
+  for (const r of source.redemptions ?? []) consider(r.timestamp);
   for (const f of source.failures ?? []) { consider(f.createdAt); consider(f.resolvedAt); }
   for (const r of source.redemptions ?? []) consider(r.timestamp);
   for (const s of source.skips ?? []) { consider(s.grantedAt); consider(s.spentAt); consider(s.lapsedAt); }
@@ -341,7 +411,7 @@ export async function importDatabase(db, dump, { confirmOverwrite = false, confi
 }
 
 async function writeImport(db, dump) {
-  const names = [...COLLECTIONS, 'state'];
+  const names = [...COLLECTIONS, 'meta', 'state'];
   const tx = db.transaction(names, 'readwrite');
   let restored = 0;
   for (const name of names) {

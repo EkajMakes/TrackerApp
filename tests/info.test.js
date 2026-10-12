@@ -42,7 +42,8 @@ test('Info renders with 0 motivation images — the section is absent, not empty
   // The rest of the tab is unaffected.
   assert.equal(root.queryAll('.schedule-shot').length, 1);
   assert.ok(headings(root).includes('Every task'));
-  assert.ok(headings(root).includes('How it works'));
+  // The points explainer was removed in stage 6: Info is schedule, gallery, tasks.
+  assert.ok(!headings(root).includes('How it works'), 'the explainer is gone');
 });
 
 test('Info renders with 1 motivation image', () => {
@@ -108,16 +109,7 @@ test('the task table is built from config, with every task present', () => {
   assert.ok(text.includes(`−${cfg.tasks.certs.penalty}`));
 });
 
-test('the explainer reads its numbers from config', () => {
-  const root = render(makeAssets(0));
-  const text = root.textContent;
-  for (const tier of cfg.streak.tiers) {
-    assert.ok(text.includes(tier.name), `${tier.name} missing`);
-    assert.ok(text.includes(`${tier.multiplier}x`), `${tier.name} multiplier missing`);
-  }
-  assert.ok(text.includes(String(cfg.bonusWeeklyCap)), 'the weekly bonus cap');
-  assert.ok(text.includes(String(cfg.skipsPerWeek)), 'the weekly skip grant');
-  assert.ok(text.includes(String(cfg.undosPerDay)), 'the daily undo allowance');
-  assert.ok(text.includes(String(cfg.balanceFloor)), 'the balance floor');
-  assert.ok(text.includes(cfg.dayBoundary.timezone), 'the timezone');
+test('Info is exactly three sections, in order', () => {
+  const root = render(makeAssets(3));
+  assert.deepEqual(headings(root), ['Schedule', 'Motivation', 'Every task']);
 });

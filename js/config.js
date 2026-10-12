@@ -78,6 +78,16 @@ export function validateConfig(raw) {
   if (raw.undosPerDay !== undefined && (!Number.isInteger(raw.undosPerDay) || raw.undosPerDay < 0)) {
     fail('undosPerDay must be an integer >= 0');
   }
+  if (raw.resetsAllowed !== undefined && (!Number.isInteger(raw.resetsAllowed) || raw.resetsAllowed < 0)) {
+    fail('resetsAllowed must be an integer >= 0');
+  }
+
+  // Points are a score, not currency. The shop is gone, and a stray `shop` key
+  // means a config written for an older build — boot it and the economy on
+  // screen would not be the one in the file.
+  if ('shop' in raw) {
+    fail('shop is no longer supported — points are a score, not currency. Remove the key.');
+  }
 
   // --- tasks ---------------------------------------------------------------
   const tasks = {};
@@ -156,35 +166,41 @@ export function validateConfig(raw) {
 
   // --- streak tiers --------------------------------------------------------
   const tiers = raw.streak?.tiers;
-  if (!Array.isArray(tiers)) {
-    fail('streak.tiers must be an array');
+  if (!Array.isArray(tiers) || tiers.length === 0) {
+    fail('streak.tiers must be a non-empty array');
   } else {
     let prev = -Infinity;
     for (const tier of tiers) {
-      if (!isPositiveInt(tier?.at)) fail('streak tier "' + tier?.name + '" needs an integer at > 0');
+      // `at: 0` is the floor tier (Cold) — a legitimate rung, not a mistake.
+      if (!Number.isInteger(tier?.at) || tier.at < 0) {
+        fail('streak tier "' + tier?.name + '" needs an integer at >= 0');
+      }
+      if (typeof tier?.name !== 'string' || !tier.name) fail('every streak tier needs a name');
       if (!(typeof tier?.multiplier === 'number' && tier.multiplier >= 1)) {
         fail('streak tier "' + tier?.name + '" needs a multiplier >= 1');
+      }
+      if (tier?.color !== undefined && !/^#[0-9a-fA-F]{3,8}$/.test(tier.color)) {
+        fail('streak tier "' + tier?.name + '" has a color that is not a hex value');
       }
       if (tier?.at <= prev) fail('streak.tiers must be sorted ascending by "at"');
       prev = tier?.at;
     }
+    if (tiers[0]?.at !== 0) fail('the first streak tier must start at 0 — every streak needs a tier');
   }
 
-  // --- shop ----------------------------------------------------------------
-  const seen = new Set();
-  if (!Array.isArray(raw.shop)) {
-    fail('shop must be an array');
-  } else {
-    for (const item of raw.shop) {
-      if (typeof item?.name !== 'string' || !item.name) {
-        fail('every shop item needs a name');
-        continue;
+  // The open-ended rung above the last tier: the multiplier keeps climbing by
+  // `perDay` and stops at `max`.
+  const beyond = raw.streak?.beyondTopTier;
+  if (beyond !== undefined) {
+    if (typeof beyond !== 'object' || beyond === null) {
+      fail('streak.beyondTopTier must be an object');
+    } else {
+      if (!(typeof beyond.perDay === 'number' && beyond.perDay >= 0)) {
+        fail('streak.beyondTopTier.perDay must be a number >= 0');
       }
-      if (seen.has(item.name)) fail('shop item name "' + item.name + '" is duplicated');
-      seen.add(item.name);
-      if (!isNonNegativeNumber(item.cost)) fail('shop item "' + item.name + '" needs a numeric cost');
-      if (item.cooldownDays !== undefined && !isNonNegativeNumber(item.cooldownDays)) {
-        fail('shop item "' + item.name + '" has a non-numeric cooldownDays');
+      const top = Array.isArray(tiers) ? tiers.at(-1)?.multiplier : undefined;
+      if (!(typeof beyond.max === 'number' && beyond.max >= (top ?? 1))) {
+        fail('streak.beyondTopTier.max must be a number >= the top tier multiplier');
       }
     }
   }
@@ -227,4 +243,9 @@ export function dailyTargetOf(task) {
 
 export function dayFlagOf(task, weekday) {
   return task.dayFlags?.[weekday] ?? null;
+}
+
+/** The open-ended rung above the last tier, if config defines one. */
+export function beyondTopTier(cfg) {
+  return cfg.streak?.beyondTopTier ?? null;
 }

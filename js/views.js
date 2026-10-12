@@ -11,6 +11,7 @@
  */
 
 import { appDateOf, weekKeyOf, weekdayOf, parseDate, weekKeyBefore } from './time.js';
+import { scheduleView as buildScheduleView } from './schedule.js';
 import { dailyTargetOf, dayFlagOf, isRostered, taskList } from './config.js';
 import {
   anchoredOn,
@@ -21,8 +22,9 @@ import {
   completionsOfTaskOnDay,
   groupedFailures,
   isLive,
+  nextTierFor,
   pendingSummary,
-  shopState,
+  records,
   tierFor,
   undoBlockedReason,
   undosRemaining,
@@ -58,18 +60,57 @@ export function humanDuration(ms) {
 
 export function headerView(world, nowMs, cfg) {
   const pending = pendingSummary(world, nowMs, cfg);
-  const tier = tierFor(world.state.currentStreak, cfg);
-  const next = cfg.streak.tiers.find((t) => t.at > world.state.currentStreak) ?? null;
+  const streak = world.state.currentStreak;
+  const tier = tierFor(streak, cfg);
+  const next = nextTierFor(streak, cfg);
+  const best = records(world, cfg);
+
+  // What the ladder line says. Below the top rung it counts down to the next
+  // name; on the open-ended rung it reports the day number and tomorrow's
+  // multiplier, because there is no next name to reach.
+  let progress;
+  if (next) {
+    const daysAway = next.at - streak;
+    progress = {
+      kind: 'next-tier',
+      daysAway,
+      nextName: next.name,
+      text: `${daysAway} more day${daysAway === 1 ? '' : 's'} to ${next.name}`,
+    };
+  } else if (tier.beyond && tier.atCap) {
+    progress = { kind: 'capped', text: `Day ${tier.daysIntoTier + 1} · ${tier.multiplier.toFixed(2)}x · maxed` };
+  } else if (tier.beyond) {
+    progress = {
+      kind: 'climbing',
+      text: `Day ${tier.daysIntoTier + 1} · ${tier.multiplier.toFixed(2)}x · +${tier.perDay.toFixed(2)} tomorrow`,
+    };
+  } else {
+    progress = { kind: 'top', text: `${tier.multiplier.toFixed(2)}x` };
+  }
+
   return {
+    // `balance` keeps its name in the data; the UI calls it Points, because
+    // nothing is spent any more.
     balance: world.state.balance,
     negative: world.state.balance < 0,
     atFloor: world.state.balance <= cfg.balanceFloor,
     floor: cfg.balanceFloor,
-    streak: world.state.currentStreak,
+    streak,
     // The tier CURRENTLY being applied — never the one being worked toward.
     tierName: tier.name,
+    tierColor: tier.color ?? null,
+    tierSlug: String(tier.name).toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    tierIndex: cfg.streak.tiers.findIndex((t) => t.name === tier.name),
+    tierCount: cfg.streak.tiers.length,
     multiplier: tier.multiplier,
-    nextTier: next && { name: next.name, multiplier: next.multiplier, daysAway: next.at - world.state.currentStreak },
+    beyond: tier.beyond,
+    atCap: tier.atCap,
+    progress,
+    nextTier: next && { name: next.name, multiplier: next.multiplier, daysAway: next.at - streak },
+    // Stated plainly, never scolding: the fact and the record it fell short of.
+    recordStreak: best.longestStreak.days,
+    isRecordNow: best.isRecordNow,
+    behindRecordBy: best.behindRecordBy,
     skipsAvailable: availableSkips(world).length,
     pending,
   };
@@ -155,22 +196,6 @@ export function todayView(world, nowMs, cfg) {
 }
 
 /* ------------------------------------------------------------------ *
- * Shop                                                                *
- * ------------------------------------------------------------------ */
-
-export function shopView(world, nowMs, cfg) {
-  return {
-    balance: world.state.balance,
-    negative: world.state.balance < 0,
-    items: shopState(world, nowMs, cfg).map((item) => ({
-      ...item,
-      cooldownLabel: item.onCooldown ? humanDuration(item.cooldownRemainingMs) : null,
-    })),
-    pending: pendingSummary(world, nowMs, cfg),
-  };
-}
-
-/* ------------------------------------------------------------------ *
  * Failure log                                                         *
  * ------------------------------------------------------------------ */
 
@@ -202,7 +227,6 @@ function balanceSeries(world) {
     events.push({ t: f.createdAt, delta: -f.actualDeduction });
     if (f.resolvedVia === 'skip') events.push({ t: f.resolvedAt, delta: f.actualDeduction });
   }
-  for (const r of world.redemptions) events.push({ t: r.timestamp, delta: -r.cost });
 
   events.sort((a, b) => a.t - b.t);
   let running = 0;
@@ -219,7 +243,7 @@ function seriesBounds(values) {
   return { min, max, range: max - min || 1 };
 }
 
-export function historyView(world, nowMs, cfg) {
+export function historyView(world, nowMs, cfg, meta = null) {
   const currentWeek = weekKeyOf(appDateOf(nowMs, cfg), cfg);
 
   // --- completions by week -------------------------------------------------
@@ -286,11 +310,6 @@ export function historyView(world, nowMs, cfg) {
     ...seriesBounds(series.map((p) => p.balance)),
   };
 
-  const redemptions = world.redemptions
-    .slice()
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .map((r) => ({ ...r, label: r.itemName }));
-
   const resolvedFailures = world.failures
     .filter((f) => f.resolvedAt !== null)
     .sort((a, b) => b.resolvedAt - a.resolvedAt)
@@ -298,18 +317,46 @@ export function historyView(world, nowMs, cfg) {
 
   // What a wipe would destroy, in the terms the confirmation speaks in.
   const liveOnly = world.completions.filter(isLive);
+  const resetsUsed = meta?.resetsUsed ?? 0;
   const reset = {
+    resetsUsed,
+    resetsAllowed: cfg.resetsAllowed ?? 0,
+    resetsRemaining: Math.max(0, (cfg.resetsAllowed ?? 0) - resetsUsed),
+    lastResetLabel: meta?.lastResetAt ? shortDate(appDateOf(meta.lastResetAt, cfg)) : null,
     completions: world.completions.length,
     live: liveOnly.length,
     failures: world.failures.length,
-    redemptions: world.redemptions.length,
+    archived: (world.archive ?? []).length,
     balance: world.state.balance,
     streak: world.state.currentStreak,
     since: liveOnly.reduce((first, c) => (!first || c.appDate < first ? c.appDate : first), null),
     through: liveOnly.reduce((last, c) => (!last || c.appDate > last ? c.appDate : last), null),
   };
 
-  return { weeks, weight, balance, redemptions, resolvedFailures, reset };
+  return { weeks, weight, balance, resolvedFailures, reset, records: recordsView(world, cfg) };
+}
+
+/**
+ * Records — the ratchet that replaced spending.
+ *
+ * Every figure is derived from the ledger on read; nothing is stored, so a
+ * voided completion or a restored backup can never leave a record stranded
+ * above what actually happened.
+ */
+export function recordsView(world, cfg) {
+  const r = records(world, cfg);
+  return {
+    longestStreak: {
+      ...r.longestStreak,
+      startLabel: r.longestStreak.start ? shortDate(r.longestStreak.start) : null,
+      endLabel: r.longestStreak.end ? shortDate(r.longestStreak.end) : null,
+    },
+    longestTopTierRun: r.longestTopTierRun,
+    bestWeek: r.bestWeek && { ...r.bestWeek, label: shortDate(r.bestWeek.weekKey) },
+    current: r.current,
+    behindRecordBy: r.behindRecordBy,
+    isRecordNow: r.isRecordNow,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -350,38 +397,27 @@ export function infoView(cfg) {
     extraEarnsPoints: task.extraEarnsPoints === true,
   }));
 
-  const anchors = tasks.filter((t) => t.anchor).map((t) => t.label);
-
-  return {
-    tasks,
-    anchors,
-    tiers: cfg.streak.tiers.map((t) => ({ ...t })),
-    rules: {
-      bonusRequiresAnchor: cfg.bonusRequiresAnchor,
-      bonusWeeklyCap: cfg.bonusWeeklyCap,
-      skipsPerWeek: cfg.skipsPerWeek,
-      skipsRollOver: cfg.skipsRollOver === true,
-      undosPerDay: cfg.undosPerDay ?? 0,
-      balanceFloor: cfg.balanceFloor,
-      boundaryHour: cfg.dayBoundary.hour,
-      timezone: cfg.dayBoundary.timezone,
-      weekStart: cfg.weekStart,
-    },
-  };
+  // The points explainer is gone: Info is the schedule, the gallery and the
+  // task reference, nothing more.
+  return { tasks };
 }
 
 /* ------------------------------------------------------------------ *
  * The whole screen, in one object                                     *
  * ------------------------------------------------------------------ */
 
-export function buildView(world, nowMs, cfg) {
+export function buildView(world, nowMs, cfg, extras = {}) {
   return {
     now: nowMs,
     header: headerView(world, nowMs, cfg),
     today: todayView(world, nowMs, cfg),
-    shop: shopView(world, nowMs, cfg),
+    // The schedule is config-shaped data rather than ledger state, so it is
+    // passed in rather than derived from the world.
+    schedule: extras.schedule
+      ? buildScheduleView(extras.schedule, nowMs, cfg, extras.scheduleOffset ?? 0)
+      : null,
     failures: failureView(world, nowMs, cfg),
     info: infoView(cfg),
-    history: historyView(world, nowMs, cfg),
+    history: historyView(world, nowMs, cfg, extras.meta ?? null),
   };
 }

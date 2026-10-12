@@ -11,8 +11,8 @@
  *     completions:  [...],   // append-only event ledger, source of truth
  *     failures:     [...],   // never deleted; resolved with resolvedAt/Via
  *     skips:        [...],   // never deleted; lapsed with lapsedAt
- *     redemptions:  [...],
  *     missedTargets:[...],   // display only — not failures, not redeemable
+ *     archive:      [...],   // rows rescued from cut features; never written at runtime
  *   }
  *
  * Invariants this file must never trade away (see CLAUDE.md):
@@ -25,6 +25,7 @@
 import {
   addDays,
   appDateOf,
+  daysBetween,
   boundariesBetween,
   isWeekBoundaryClose,
   weekKeyAfter,
@@ -53,8 +54,10 @@ export function createWorld(nowMs, cfg) {
     completions: [],
     failures: [],
     skips: [],
-    redemptions: [],
     missedTargets: [],
+    // Rows rescued from features that have been cut. Nothing writes here at
+    // runtime; the stage-6 migration fills it and the export carries it.
+    archive: [],
   };
   return grantWeeklySkips(world, weekKey, nowMs, cfg);
 }
@@ -64,8 +67,8 @@ const clone = (world) => ({
   completions: world.completions.slice(),
   failures: world.failures.slice(),
   skips: world.skips.slice(),
-  redemptions: world.redemptions.slice(),
   missedTargets: world.missedTargets.slice(),
+  archive: (world.archive ?? []).slice(),
 });
 
 /** Replace one record in a collection by id, leaving the rest untouched. */
@@ -122,10 +125,65 @@ export function bonusHeadroom(world, weekKey, cfg) {
  * Multiplier                                                          *
  * ------------------------------------------------------------------ */
 
+/**
+ * The tier in force at a given streak.
+ *
+ * The named rungs come straight from config. Above the LAST rung the ladder
+ * keeps climbing: `beyondTopTier.perDay` per extra day, hard-stopped at `max`.
+ * At streak N above threshold T:
+ *
+ *     multiplier = min(max, topMultiplier + (N - T) * perDay)
+ *
+ * so with the shipped numbers day 7 is 1.50x, day 20 is 1.76x, and day 57
+ * reaches 2.50x and stays there however long the run gets.
+ *
+ * Returns the tier plus what it takes to read the ladder: whether this is the
+ * open-ended rung, how many days into it, and whether the cap is reached.
+ */
 export function tierFor(streak, cfg) {
-  let tier = { name: null, multiplier: 1, at: 0 };
-  for (const t of cfg.streak.tiers) if (streak >= t.at) tier = t;
-  return tier;
+  const tiers = cfg.streak.tiers;
+  let index = 0;
+  for (let i = 0; i < tiers.length; i += 1) if (streak >= tiers[i].at) index = i;
+
+  const tier = tiers[index];
+  const isTop = index === tiers.length - 1;
+  const beyond = cfg.streak.beyondTopTier;
+
+  if (!isTop || !beyond) {
+    return {
+      ...tier,
+      multiplier: tier.multiplier,
+      beyond: false,
+      daysIntoTier: streak - tier.at,
+      atCap: false,
+      nextDayMultiplier: null,
+    };
+  }
+
+  const raw = tier.multiplier + (streak - tier.at) * beyond.perDay;
+  const multiplier = Math.min(beyond.max, round2(raw));
+  const next = Math.min(beyond.max, round2(tier.multiplier + (streak + 1 - tier.at) * beyond.perDay));
+  return {
+    ...tier,
+    multiplier,
+    beyond: true,
+    daysIntoTier: streak - tier.at,
+    atCap: multiplier >= beyond.max,
+    // What tomorrow pays, so the UI can say "+0.02 tomorrow" without doing math.
+    nextDayMultiplier: next,
+    perDay: beyond.perDay,
+    max: beyond.max,
+  };
+}
+
+/** Two decimals, free of binary-float dust: 1.5 + 13*0.02 must be 1.76, not 1.7600000000000002. */
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+/** The next named rung above a streak, or null at the top of the ladder. */
+export function nextTierFor(streak, cfg) {
+  return cfg.streak.tiers.find((t) => t.at > streak) ?? null;
 }
 
 /** Earned points only. Never applied to penalties or refunds. */
@@ -366,7 +424,6 @@ function grantWeeklySkips(world, weekKey, at, cfg) {
         source: 'weekly-grant',
         grantedWeekKey: weekKey,
         grantedAt: at,
-        redemptionId: null,
         spentAt: null,
         spentOnFailureId: null,
         lapsedAt: null,
@@ -593,6 +650,113 @@ export function rollover(world, nowMs, cfg) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Records — the ratchet that replaced spending                        *
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every anchored app-day, oldest first.
+ *
+ * The streak is derived here rather than read from state, because `state`
+ * only remembers the CURRENT run. The ledger remembers all of them, so the
+ * records below survive a broken streak, a catch-up, and a restore.
+ */
+function anchoredDays(world, cfg) {
+  const days = new Set();
+  for (const c of world.completions) {
+    if (!isLive(c)) continue;
+    if (cfg.tasks[c.taskId]?.anchor === true) days.add(c.appDate);
+  }
+  return [...days].sort();
+}
+
+/**
+ * Walk the anchored days and emit every unbroken run as
+ * { start, end, length }. A gap of one calendar day ends a run — the same
+ * rule settlement uses when it resets the streak at a day close.
+ */
+export function streakRuns(world, cfg) {
+  const days = anchoredDays(world, cfg);
+  const runs = [];
+  let start = null;
+  let previous = null;
+
+  for (const day of days) {
+    if (previous && addDays(previous, 1) === day) {
+      previous = day;
+      continue;
+    }
+    if (start) runs.push({ start, end: previous, length: daysBetween(start, previous) + 1 });
+    start = day;
+    previous = day;
+  }
+  if (start) runs.push({ start, end: previous, length: daysBetween(start, previous) + 1 });
+  return runs;
+}
+
+/**
+ * Records, derived on every read and stored nowhere.
+ *
+ * A stored record would need to be maintained at every write and would drift
+ * the first time a completion was voided or a backup restored. Deriving costs
+ * one pass over a ledger that is small by construction.
+ */
+export function records(world, cfg) {
+  const runs = streakRuns(world, cfg);
+  const topTier = cfg.streak.tiers.at(-1);
+  const beyondAt = topTier?.at ?? Infinity;
+
+  // Longest streak ever, and the tier that run reached at its peak.
+  let longest = { length: 0, start: null, end: null };
+  for (const run of runs) if (run.length > longest.length) longest = run;
+  const longestTier = longest.length > 0 ? tierFor(longest.length, cfg) : null;
+
+  // Longest run of consecutive days spent AT the top rung. A 10-day streak
+  // contributes 10 - 7 + 1 = 4 such days, not 10.
+  let longestTop = 0;
+  for (const run of runs) {
+    if (run.length >= beyondAt) longestTop = Math.max(longestTop, run.length - beyondAt + 1);
+  }
+
+  // Best week by net points: what was earned, less what the misses cost,
+  // plus whatever skips handed back.
+  const weeks = new Map();
+  const weekOf = (key) => {
+    if (!weeks.has(key)) weeks.set(key, { weekKey: key, earned: 0, penalised: 0, refunded: 0 });
+    return weeks.get(key);
+  };
+  for (const c of world.completions) {
+    if (isLive(c)) weekOf(c.weekKey).earned += c.pointsAwarded ?? 0;
+  }
+  for (const f of world.failures) {
+    const week = weekOf(f.incurredWeekKey);
+    week.penalised += f.actualDeduction;
+    if (f.resolvedVia === 'skip') week.refunded += f.actualDeduction;
+  }
+  let bestWeek = null;
+  for (const week of weeks.values()) {
+    const net = week.earned - week.penalised + week.refunded;
+    if (!bestWeek || net > bestWeek.net) bestWeek = { ...week, net };
+  }
+
+  const current = world.state.currentStreak;
+  return {
+    longestStreak: {
+      days: longest.length,
+      start: longest.start,
+      end: longest.end,
+      tierName: longestTier?.name ?? null,
+      multiplier: longestTier?.multiplier ?? null,
+    },
+    longestTopTierRun: { days: longestTop, label: topTier?.name ?? null, threshold: beyondAt },
+    bestWeek,
+    current,
+    // The gap, stated plainly: positive means there is a record to beat.
+    behindRecordBy: Math.max(0, longest.length - current),
+    isRecordNow: current > 0 && current >= longest.length,
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Views — pure derivations the UI will render in stage 2              *
  * ------------------------------------------------------------------ */
 
@@ -661,67 +825,6 @@ export function groupedFailures(world) {
     );
 }
 
-/** Shop cooldown and affordability, all derived — nothing cached. */
-export function shopState(world, nowMs, cfg) {
-  const { pending, locked } = pendingSummary(world, nowMs, cfg);
-  return cfg.shop.map((item) => {
-    const last = world.redemptions
-      .filter((r) => r.itemName === item.name)
-      .reduce((max, r) => Math.max(max, r.timestamp), -Infinity);
-    const cooldownMs = (item.cooldownDays ?? 0) * 86400000;
-    const availableAt = last === -Infinity ? -Infinity : last + cooldownMs;
-    const onCooldown = nowMs < availableAt;
-    const negative = world.state.balance < 0;
-    const affordable = world.state.balance >= item.cost;
-    return {
-      ...item,
-      onCooldown,
-      cooldownRemainingMs: onCooldown ? availableAt - nowMs : 0,
-      affordable,
-      negativeBalance: negative,
-      redeemable: affordable && !negative && !onCooldown,
-      // Pending never makes an item redeemable; it only explains the tile.
-      reachableWithPending: !affordable && world.state.balance + pending >= item.cost,
-      pendingIsLocked: locked,
-      shortfall: Math.max(0, item.cost - world.state.balance),
-    };
-  });
-}
-
-export function redeemItem(world, itemName, nowMs, cfg) {
-  const state = shopState(world, nowMs, cfg).find((i) => i.name === itemName);
-  if (!state) return { ok: false, reason: 'unknown-item', world };
-  if (state.negativeBalance) return { ok: false, reason: 'negative-balance', world };
-  if (state.onCooldown) return { ok: false, reason: 'cooldown', world };
-  if (!state.affordable) return { ok: false, reason: 'unaffordable', world };
-
-  const next = clone(world);
-  const id = 'rdm:' + new Date(nowMs).toISOString();
-  next.state.balance -= state.cost;
-  next.redemptions = [
-    ...next.redemptions,
-    { id, itemName, cost: state.cost, timestamp: nowMs, balanceAfter: next.state.balance },
-  ];
-  // The Skip Token is an ordinary item that also mints a skip. Purchased
-  // skips never lapse.
-  if (state.name === 'Skip Token') {
-    next.skips = [
-      ...next.skips,
-      {
-        id: 'skip:buy:' + new Date(nowMs).toISOString(),
-        source: 'purchase',
-        grantedWeekKey: weekKeyOf(appDateOf(nowMs, cfg), cfg),
-        grantedAt: nowMs,
-        redemptionId: id,
-        spentAt: null,
-        spentOnFailureId: null,
-        lapsedAt: null,
-      },
-    ];
-  }
-  return { ok: true, world: next };
-}
-
 /** Full dump for the JSON export — every store, in full. */
 export function exportAll(world, cfg) {
   return {
@@ -730,8 +833,8 @@ export function exportAll(world, cfg) {
     completions: world.completions,
     failures: world.failures,
     skips: world.skips,
-    redemptions: world.redemptions,
     missedTargets: world.missedTargets,
+    archive: world.archive ?? [],
     configSnapshot: cfg,
   };
 }

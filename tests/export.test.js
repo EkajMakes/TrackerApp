@@ -2,14 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { IDBFactory } from 'fake-indexeddb';
 
-import { COLLECTIONS, ImportRefused, loadWorld, openDatabase } from '../js/db.js';
+import { COLLECTIONS, DB_VERSION, ImportRefused, loadWorld, openDatabase } from '../js/db.js';
 import {
   completeTaskAction,
   exportTracker,
   importTracker,
   inspectTracker,
   openTracker,
-  redeemItemAction,
   runRollover,
   spendSkipAction,
   undoAction,
@@ -38,7 +37,6 @@ async function loadedTracker(name) {
     if (i === 0) await go(d, 21, 'read');
   }
   await go('2026-08-29', 14, 'chore', { poolLabel: 'Dishes' });
-  await redeemItemAction(db, cfg, at('2026-08-30', 18), 'Medium Coke or Sprite');
 
   // Cross two week boundaries: failures are written, then expire; weekly
   // skip grants lapse; a weekly target is missed.
@@ -53,8 +51,11 @@ test('the export contains every store, with nothing pruned by state', async () =
   const { db } = await loadedTracker('export-shape');
   const dump = await exportTracker(db, cfg, at('2026-09-16', 11));
 
-  for (const store of [...COLLECTIONS, 'state']) {
+  for (const store of [...COLLECTIONS, 'meta', 'state']) {
     assert.ok(Array.isArray(dump[store]), `${store} missing`);
+  }
+  // Every store the fixture actually exercises should carry rows.
+  for (const store of ['completions', 'failures', 'skips', 'missedTargets', 'state']) {
     assert.ok(dump[store].length > 0, `${store} is empty — the fixture should have exercised it`);
   }
 
@@ -76,8 +77,8 @@ test('the export contains every store, with nothing pruned by state', async () =
   assert.ok(dump.skips.some((s) => s.lapsedAt !== null), 'lapsed');
 
   assert.ok(dump.missedTargets.length > 0);
-  assert.ok(dump.redemptions.length > 0);
   assert.equal(dump.state.length, 1);
+  assert.ok(Array.isArray(dump.meta), 'the meta store rides along in the export');
   assert.equal(dump.configSnapshot, cfg);
   assert.doesNotThrow(() => JSON.stringify(dump));
 });
@@ -168,13 +169,13 @@ test('import refuses a schema-version mismatch outright', async () => {
   });
   const fresh = await openDatabase(factory, name);
 
-  for (const version of [2, 0, undefined]) {
+  for (const version of [1, 3, undefined]) {
     const wrong = { ...dump, schemaVersion: version };
     const err = await importTracker(fresh, wrong).then(() => null, (e) => e);
     assert.ok(err instanceof ImportRefused, `version ${version} should be refused`);
     assert.equal(err.code, 'schema-mismatch');
     assert.match(err.message, new RegExp(`version ${version ?? 'unknown'}`));
-    assert.match(err.message, /version 1/);
+    assert.match(err.message, new RegExp(`version ${DB_VERSION}`));
   }
 
   // Not waivable: confirming everything still refuses.
@@ -286,7 +287,7 @@ test('the export includes voided completions', async () => {
  * Start fresh                                                         *
  * ------------------------------------------------------------------ */
 
-test('erasing drops the database and re-seeds a clean world', async () => {
+test('erasing drops the database and re-seeds a clean world', { skip: 'replaced by tests/reset.test.js' }, async () => {
   const factory = new IDBFactory();
   const name = 'reset-cycle';
   const { db } = await openTracker(factory, cfg, at('2026-09-07', 7), { name });

@@ -6,13 +6,14 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Tracker">
-<meta name="theme-color" content="#0d1117">
+<meta name="theme-color" content="#2d1b3d">
 <title>Tracker</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
 <link rel="icon" href="./icons/icon-192.png">
 <link rel="stylesheet" href="./css/style.css">
 <link rel="stylesheet" href="./css/stage5.css">
+<link rel="stylesheet" href="./css/stage6.css">
 </head>
 <body>
 
@@ -24,7 +25,7 @@
 
   <main id="main" class="main">
     <section id="view-today"    class="view"></section>
-    <section id="view-shop"     class="view" hidden></section>
+    <section id="view-schedule" class="view" hidden></section>
     <section id="view-failures" class="view" hidden></section>
     <section id="view-info"     class="view" hidden></section>
     <section id="view-history"  class="view" hidden></section>
@@ -32,7 +33,7 @@
 
   <nav id="tabs" class="tabs">
     <button class="tab is-active" data-tab="today"    type="button"><span class="tab-i">✓</span>Today</button>
-    <button class="tab"           data-tab="shop"     type="button"><span class="tab-i">★</span>Shop</button>
+    <button class="tab"           data-tab="schedule" type="button"><span class="tab-i">◷</span>Schedule</button>
     <button class="tab"           data-tab="failures" type="button"><span class="tab-i">!</span>Failures<span class="tab-badge" id="tab-badge" hidden></span></button>
     <button class="tab"           data-tab="info"     type="button"><span class="tab-i">☰</span>Info</button>
     <button class="tab"           data-tab="history"  type="button"><span class="tab-i">▤</span>History</button>

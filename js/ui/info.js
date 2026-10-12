@@ -189,65 +189,6 @@ function taskTable(info) {
   return wrap;
 }
 
-function rulesSection(info) {
-  const { rules, tiers, anchors } = info;
-  const wrap = el('div');
-
-  const tierCard = el('div', 'card');
-  tierCard.append(el('div', 'card-title', 'Streak multiplier'));
-  tierCard.append(el('p', 'prose',
-    'A day counts toward the streak when at least one anchor task is completed. '
-    + 'The multiplier applies to points earned, never to penalties, and the tier in force is '
-    + 'the one settled at the start of the day — reaching a new tier pays from tomorrow.'));
-  const ladder = el('div', 'tier-ladder');
-  for (const tier of tiers) {
-    const step = el('div', `tier-step tier-${tier.name.toLowerCase()}`);
-    step.append(el('span', 'tier-name', tier.name));
-    step.append(el('span', 'tier-mult', `${tier.multiplier}x`));
-    step.append(el('span', 'tier-at', `${tier.at} days`));
-    ladder.append(step);
-  }
-  tierCard.append(ladder);
-  wrap.append(tierCard);
-
-  const anchorCard = el('div', 'card');
-  anchorCard.append(el('div', 'card-title', 'Anchors'));
-  anchorCard.append(el('p', 'prose',
-    `${anchors.join(', ')} — completing any one of these keeps the streak alive for the day.`
-    + (rules.bonusRequiresAnchor
-      ? ' Until one lands, bonus tasks are still tappable but settle at 0 points that night.'
-      : '')));
-  wrap.append(anchorCard);
-
-  const bonusCard = el('div', 'card');
-  bonusCard.append(el('div', 'card-title', 'Bonus points'));
-  bonusCard.append(el('p', 'prose',
-    `Bonus taps are recorded straight away but scored at the ${rules.boundaryHour}:00 day close, `
-    + 'once the anchor gate and the weekly cap are both known — so a chore done before the day’s '
-    + `first anchor still pays in full. At most ${rules.bonusWeeklyCap} bonus points count per week.`));
-  wrap.append(bonusCard);
-
-  const skipCard = el('div', 'card');
-  skipCard.append(el('div', 'card-title', 'Skips and undo'));
-  skipCard.append(el('p', 'prose',
-    `${rules.skipsPerWeek} skips arrive each week and ${rules.skipsRollOver ? 'roll over' : 'do not roll over'}; `
-    + 'purchased ones never lapse. A skip clears one entry in the Failure log and refunds exactly what '
-    + `that miss cost. Separately, ${rules.undosPerDay} undos a day take back a completion tapped by `
-    + 'mistake — same day only, and the tap stays in the record either way.'));
-  wrap.append(skipCard);
-
-  const floorCard = el('div', 'card');
-  floorCard.append(el('div', 'card-title', 'The floor'));
-  floorCard.append(el('p', 'prose',
-    `The balance can go negative, down to ${rules.balanceFloor}. Nothing is redeemable while it is below `
-    + 'zero, and no debt is ever forgiven automatically. Days run '
-    + `${rules.boundaryHour}:00 to ${rules.boundaryHour}:00, weeks from ${rules.weekStart}, `
-    + `${rules.timezone}.`));
-  wrap.append(floorCard);
-
-  return wrap;
-}
-
 /* ---------------- the tab ---------------- */
 
 export function renderInfo(root, view, actions, assets) {
@@ -267,7 +208,4 @@ export function renderInfo(root, view, actions, assets) {
 
   root.append(el('h2', 'sec', 'Every task'));
   root.append(taskTable(view.info));
-
-  root.append(el('h2', 'sec', 'How it works'));
-  root.append(rulesSection(view.info));
 }

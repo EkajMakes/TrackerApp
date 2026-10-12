@@ -1,8 +1,8 @@
 # SPEC.md — Habit Gamification PWA
 
-Version: rev. 8 (stage 5 plus the Start fresh control)
-Status: **built** — engine, storage, five-tab UI, PWA shell, export/import, undo, the asset
-pipeline and the week simulator. Verified in headless Chrome, including a true airplane-mode
+Version: rev. 9 (stage 6: the shop is gone, the ladder is seven rungs, Schedule is a tab)
+Status: **built** — engine, storage, five-tab UI (Today · Schedule · Failures · Info ·
+History), PWA shell, export/import, undo, records, the asset pipeline and the week simulator. Verified in headless Chrome, including a true airplane-mode
 boot with the server stopped. Not yet done: Add to Home Screen on the real device, final icon
 art, and converting the HEIC motivation images to JPEG.
 
@@ -10,8 +10,9 @@ art, and converting the HEIC motivation images to JPEG.
 
 ## 1. Overview & constraints
 
-A single-user, offline-first habit tracker with a point economy, installed to the
-iPhone home screen from GitHub Pages.
+A single-user, offline-first habit tracker, installed to the iPhone home screen from GitHub
+Pages. **Points are a score, not currency** — there is nothing to spend them on. The reward is
+the seven-rung streak ladder (§6.1) and the records that only move when you beat them (§10.6).
 
 | Constraint | Decision |
 |---|---|
@@ -21,7 +22,7 @@ iPhone home screen from GitHub Pages.
 | Install | `manifest.json` + service worker → "Add to Home Screen" yields a standalone, chrome-less app with its own icon. |
 | Target | iPhone Safari. Mobile-first, one-handed, large tap targets (min 44×44 pt). |
 | Time | Day boundary 02:00 `America/Chicago`; week boundary Monday 02:00 `America/Chicago`. IANA identifier only — no hardcoded UTC offset anywhere. |
-| Config | Everything tunable lives in `config.json`. No point value, task, tier, or shop item is duplicated in code. |
+| Config | Everything tunable lives in `config.json`; the daily plan lives in `schedule.json`. No point value, task, tier name, multiplier or colour is duplicated in code. |
 
 ### Definitions used throughout
 
@@ -49,20 +50,23 @@ iPhone home screen from GitHub Pages.
     apple-touch-icon.png    (180×180 — iOS ignores manifest icons for the home screen)
 /css/
     style.css               layout, components
-    stage5.css              the visual pass: tier weight, tap feedback, Info tab
-/config.json                already present; read at runtime, never written
+    stage5.css              tap feedback, Info tab, undo
+    stage6.css              the tier centrepiece, Schedule, records, the typed reset
+/config.json                read at runtime, never written
+/schedule.json              daily time blocks; read at runtime, network-first like config
 /js/
     config.js               fetch, validate, freeze config
     time.js                 PURE — Intl-based boundary math
     scoring.js              PURE — the engine: settlement, multiplier, caps, penalties
     views.js                PURE — presentation derivations on top of the engine (§6.6)
+    schedule.js             PURE — schedule.json parsing, 24+ notation, current block (§10.7)
     rollover.js             orchestrator: DB in → scoring.js → views.js → DB out;
                             also the only read path the ui/ modules use
     db.js                   IndexedDB open/upgrade, CRUD, indexed queries, export/import
     app.js                  entry point: owns the clock and the DOM shell (§6.7)
     ui/
         today.js            roster + the pinned header + the undo control
-        shop.js
+        schedule.js         today's blocks as a timeline
         failures.js
         info.js             schedule, motivation gallery, task reference, rules
         history.js          weekly rollups + inline-SVG charts (no library)
@@ -81,6 +85,9 @@ iPhone home screen from GitHub Pages.
     rollover.test.js
     export.test.js          export/import round-trip and the import guard
     undo.test.js            the undo allowance and voided-record rules
+    ladder.test.js          the seven-rung multiplier and the records derivation
+    schedule.test.js        24+ notation, the app-day, current block and gaps
+    reset.test.js           the v1→v2 archive migration and the single-use reset
     assets.test.js          manifest paths resolve with exact case
     info.test.js            the Info tab at 0, 1 and 20 images
     dom-stub.js             the minimal DOM the render tests need (no dependency)
@@ -92,14 +99,14 @@ iPhone home screen from GitHub Pages.
 /BUILD_PROMPT.md            (existing)
 ```
 
-`time.js`, `scoring.js` and `views.js` are free of DOM, IndexedDB, `Date.now()`, and
+`time.js`, `scoring.js`, `schedule.js` and `views.js` are free of DOM, IndexedDB, `Date.now()`, and
 `new Date()`-without-argument. That is what makes them runnable unmodified under
 `node --test`. The dependency direction never reverses:
 
 ```
-time.js ─┬─> scoring.js ─┬─> views.js ──┐
-config.js┘               │              ├──> rollover.js ──> app.js ──> ui/*
-                    db.js ──────────────┘
+time.js ─┬─> scoring.js ──┬─> views.js ──┐
+config.js┘                │   schedule.js┤
+                     db.js ──────────────┴──> rollover.js ──> app.js ──> ui/*
 ```
 
 ### Service worker policy
@@ -109,10 +116,11 @@ config.js┘               │              ├──> rollover.js ──> app.j
   of `service-worker.js`. **Bump it by hand to ship a build** — nothing bumps it automatically,
   and cache-first never asks, so a stale shell would otherwise be served forever. The `activate`
   handler deletes older `tracker-*` caches. This is what makes an airplane-mode cold start work.
-- **`config.json`**: **network-first with cache fallback**, so a reload while online always picks
-  up a retune, and offline the last good copy runs. It is *also* precached at install, because
-  the first page load fetches it before the worker controls the page — without that, a user who
-  installs and immediately goes offline would have a shell but no economy to boot with.
+- **`config.json` and `schedule.json`**: **network-first with cache fallback**, so a reload
+  while online always picks up a retune or a changed block, and offline the last good copy runs.
+  Both are *also* precached at install, because the first page load fetches them before the
+  worker controls the page — without that, a user who installs and immediately goes offline
+  would have a shell but no economy and no schedule to boot with.
 - **Precaching is best-effort.** Every `caches` call is wrapped: if CacheStorage refuses to open
   (storage pressure, eviction, a private-mode quirk), install still succeeds. A worker that goes
   redundant during install takes the fetch handler with it, leaving *no* offline shell at all —
@@ -121,11 +129,13 @@ config.js┘               │              ├──> rollover.js ──> app.j
 
 ### Install (`manifest.json` + iOS meta)
 
-`display: standalone`, portrait, `#0d1117` background and theme colour, `start_url` and `scope`
+`display: standalone`, portrait, `#2d1b3d` (deep plum) background and theme colour to match the
+icon artwork, `start_url` and `scope`
 relative so the app works from a GitHub Pages project subpath. iOS ignores manifest icons for
 the home screen, so `apple-touch-icon` (180×180) is linked directly, alongside
 `apple-mobile-web-app-capable` and a black-translucent status bar. Icons are flat placeholders
-generated at 192, 512 and 180 — replace the art without touching anything else.
+supplied at 192, 512 and 180. Replacing the art is a file swap plus a `CACHE_VERSION` bump —
+cache-first would otherwise serve the old icons forever.
 
 ---
 
@@ -155,7 +165,7 @@ its past entries remain in history and export.
 
 ## 4. IndexedDB schema
 
-Database `habitTracker`, version 1. Six object stores. **Nothing is ever deleted from any
+Database `habitTracker`, **version 2**. Seven object stores. **Nothing is ever deleted from any
 store** — end-of-life is a state transition on a retained row, which keeps the JSON export a
 complete record of everything that ever happened.
 
@@ -210,11 +220,24 @@ being settled and filtered in memory — the set is tiny).
 Indexes: `by_redeemThroughWeekKey`, `by_incurredWeekKey`, `by_taskId`.
 **Open** = `resolvedAt === null`.
 
-### `redemptions` (keyPath `id`)
+### `archive` (keyPath `id`) — rows rescued from cut features
 
-`{ id: 'rdm:<ISO>', itemName, cost, timestamp, balanceAfter }`. Index `by_itemName`.
-Cooldown state is **derived** from the newest timestamp for that item — never stored,
-so editing `cooldownDays` in config takes effect immediately.
+`{ id: 'archive:<store>:<originalId>', store, archivedAt, archivedBecause, row }`, index
+`by_store`. Nothing writes here at runtime.
+
+The shop was removed in stage 6, which retired the v1 `redemptions` store. **Cutting a feature
+is not permission to lose its history**: `migrateToV2` copies every redemption row into
+`archive` inside the same version-change transaction and drops the store only afterwards. The
+export has always promised every redemption ever made, and that promise outlives the feature
+that created them.
+
+### `meta` (keyPath `id`) — exactly one row, `id: 'meta'`
+
+`{ id: 'meta', resetsUsed, lastResetAt }`.
+
+Deliberately **not** part of the world. The world is precisely what a reset erases, so a
+`resetsUsed` living there would be erased by the reset it is meant to limit — and "single use"
+would be a lie. §8.6 covers the mechanism.
 
 ### `skips` (keyPath `id`)
 
@@ -232,8 +255,8 @@ makes a *day* un-settleable twice even if a caller replays boundaries from a rew
 pointer — the deterministic ids stop duplicate rows and the pending filter stops a
 second bonus award, but only this guard stops the streak from incrementing twice.
 
-Only these six values are cached. Weekly quota/target counts, bonus headroom, shop cooldowns,
-skip balance, and the failure log are **derived from the ledgers on demand**. That is the
+Only these six values are cached. Weekly quota/target counts, bonus headroom, skip balance,
+the failure log and every record are **derived from the ledgers on demand**. That is the
 mechanism that makes rollover idempotent by construction: there is no denormalized counter
 that a double-run could double-increment.
 
@@ -260,25 +283,21 @@ Import is the one operation that can bury real history, so it is **guarded**:
 | the target database already holds completions | needs `confirmOverwrite`. The refusal names **both worlds** — *"This database has 47 completions through 2026-09-14; the file has 31 completions through 2026-09-02"* — so the choice is made with the numbers in view. |
 | the file's newest record predates the database's newest | needs `confirmStale`, **separately**. Confirming the overwrite does not waive it: restoring a stale backup over newer data is the specific mistake worth being loud about. |
 
-### Start fresh — the one destructive control
+### The single-use reset — the one named exception
 
-The History tab ends with a **Start fresh** control that erases everything on the device and
-re-seeds. It exists for clearing test data before real use, and it is the single deliberate
-exception to rule 1 in `CLAUDE.md`:
+History ends with a Danger section holding the only destructive control in the app. It is the
+**single named exception** to never-delete, and it is scoped as narrowly as the need allows:
 
-- it drops the **whole database** with `indexedDB.deleteDatabase` **at the call site in
-  `app.js`** — `db.js` still contains no delete path, and nothing in normal operation removes
-  a row. Whole-database or nothing; never per-record deletion;
-- the confirmation **names what will be destroyed** — completions, failures, balance, streak,
-  and the date range — in the same spirit as the import guard;
-- it **offers the export first**, as the primary button in the sheet;
-- the destructive button **arms on the first tap and only erases on the second**, disarming
-  itself after four seconds, so a fat finger on the History tab cannot wipe a month;
-- afterwards the app re-opens, re-seeds a fresh world (balance 0, streak 0, a new week of
-  skips) and returns to Today.
+| gate | why |
+|---|---|
+| **`config.resetsAllowed` uses for the life of the app** (1) | a reset is for clearing test data before real use, not a habit. The allowance is config, never hardcoded. |
+| **a completed export first** | the typing field does not appear until a file has actually been written. "I meant to back up first" is the regret the whole flow exists to prevent. A *cancelled* share counts as no backup and the gate stays shut; a share that fails for any other reason falls back to a download, so the gate is never unreachable. |
+| **typing `RESET` exactly** | nothing matches it by accident. |
+| **`meta.resetsUsed` survives the wipe** | read before, rewritten after, into the `meta` store of the re-created database. A counter living inside the erased data would reset itself and "single use" would mean nothing. |
 
-`tests/export.test.js` covers the full cycle: live a week, wipe, re-open, and assert the world
-is empty and the re-seeded database is immediately usable with no tier carried over.
+Once spent, the section is replaced by a line saying so, and `resetEverything` refuses with
+`no-resets-left` without touching the database. `tests/reset.test.js` covers the whole cycle,
+including that a refused reset leaves the data deep-equal to what it was.
 
 `inspectImport(db, dump)` returns the same report (`blocking`, `needsConfirmation`, `target`,
 `file`) without writing anything, so a UI can show the numbers before asking. A matching backup
@@ -331,15 +350,39 @@ fixed 24-hour spans.
 Signature shape: every function takes `(state, ledgerSlice, config, nowMs)` and returns a
 plain description of what changed. It never touches the DOM, IndexedDB, or the clock.
 
-### 6.1 Multiplier
+### 6.1 The streak ladder
 
-`tierFor(streak, cfg)` returns the highest tier whose `at` ≤ streak, else `{multiplier: 1, name: null}`.
-Config gives 3 → Flowing 1.05×, 5 → Cooking 1.10×, 10 → Burning 1.20×.
+Seven named rungs plus an open-ended eighth, all read from `config.streak.tiers` — names,
+thresholds, multipliers and colours alike. Nothing about the ladder is hardcoded.
 
-- Applied **only to earned points**: task completions and `targetBonus`.
-- **Never** applied to penalties, and never to skip refunds.
-- Applied at the moment points are awarded, never retroactively when the tier changes.
-- Awards round with `Math.round`. Configured penalties are integers and are never multiplied.
+| Streak | Tier | Multiplier |
+|---|---|---|
+| 0 | Cold | 1.00x |
+| 1 | Spark | 1.05x |
+| 2 | Embers | 1.10x |
+| 3 | Blaze | 1.15x |
+| 4 | Burning | 1.20x |
+| 5 | Inferno | 1.30x |
+| 6 | Primal Burn | 1.40x |
+| 7+ | Conflagration | 1.50x, climbing |
+
+Above the **last** rung the ladder keeps going. With threshold `T`, top multiplier `M` and
+`config.streak.beyondTopTier = { perDay, max }`:
+
+```
+multiplier(N) = min(max, M + (N - T) * perDay)
+```
+
+so day 7 pays 1.50x, day 20 pays 1.76x, and day 57 reaches 2.50x and stays there for as long
+as the run lasts. Arithmetic is rounded to two decimals at each step, because
+`1.5 + 13 * 0.02` is otherwise `1.7600000000000002` and the UI would show it.
+
+`tierFor()` returns the rung plus what the screen needs to describe it — whether this is the
+open-ended rung, how many days into it, whether the cap is reached, and what tomorrow pays —
+so no renderer ever does ladder arithmetic.
+
+The older rules are untouched: the multiplier applies to **earned points only**, never to
+penalties or refunds, and it is always the tier settled at the **day's start** (§6.2).
 
 ### 6.2 Streak timing — documented, deliberate lag
 
@@ -429,7 +472,7 @@ engine** — no DOM, no IndexedDB, no `Date.now()`, the instant passed in as an 
 so it is testable under `node --test` and cannot drift from the rules.
 
 It owns exactly four things beyond the pass-throughs of `pendingSummary`, `groupedFailures`
-and `shopState`:
+and the pending summary:
 
 | derivation | what it produces |
 |---|---|
@@ -637,32 +680,22 @@ skip clears it but refunds nothing."*
 
 ---
 
-## 8. Balance, shop, and edge cases
+## 8. Points, the floor, and edge cases
 
 ### 8.1 Balance
 
 Carries over indefinitely, may go negative, hard floor at `balanceFloor` (−250). No automatic
 debt forgiveness. Shop redemption is blocked while the balance is negative.
 
-### 8.2 Shop
+### 8.2 Points are a score
 
-Catalog straight from `config.shop`. Redeeming requires `balance >= cost` **and** `balance >= 0`
-**and** the item off cooldown — where `balance` is the **settled** balance (§6.5). Pending
-bonus points never make an item redeemable.
+There is nothing to spend them on. `balance` keeps its name in the data — renaming a persisted
+field to chase a UI label would be churn for nothing — but every screen calls it **Points**,
+because nothing is being spent. The floor, the penalties and the skip refunds all behave
+exactly as before; what changed is that the number is now a scoreboard rather than a wallet.
 
-They do, however, change what the tile *says*. When `cost > balance` but
-`cost <= balance + pending`, the tile stays disabled and explains itself rather than sitting
-there greyed out with no reason — and the wording follows the gate state (§6.5):
-*"Needs 12 more — 29 pending settles tonight"* when unlocked, or
-*"Needs 12 more — 29 locked until an anchor task"* when not. A flatly unaffordable item shows
-the plain shortfall. The negative-balance block is independent of pending and is stated as its
-own reason.
-
-Cooldown is derived: `lastRedemption(item) + cooldownDays × 24h`,
-measured in real elapsed time (not app-days), rendered as a disabled tile with remaining time.
-Items with no `cooldownDays` (Skip Token) have no cooldown. Every redemption is logged with a
-timestamp and the resulting balance. The Skip Token is an ordinary item that additionally
-inserts a `source: 'purchase'` row into `skips`.
+Validation **rejects a `shop` key outright** (§3). A config carrying one was written for an
+older build, and booting it would put an economy on screen that is not the one in the file.
 
 ### 8.3 Multi-week catch-up
 
@@ -802,12 +835,62 @@ box.
 
 ---
 
+## 10.6 Records — the ratchet that replaced spending
+
+With nothing to buy, the thing worth chasing is a number that only moves when you beat it.
+History opens with four cards, all **derived from the ledger on read and stored nowhere**:
+
+| card | derivation |
+|---|---|
+| **Longest streak** | the longest unbroken run of anchored app-days, with the tier it reached |
+| **Longest Conflagration** | the longest run of consecutive days spent **at** the top rung. A 10-day streak contributes `10 - 7 + 1 = 4` such days, not 10 |
+| **Best week** | the highest **net** week: earned − penalised + refunded, so a big-earning week that also took a beating does not win |
+| **Current streak** | and the gap, stated plainly: "1 short of best", or marked as a record when it ties or passes |
+
+Storing these would mean maintaining them at every write, and they would drift the first time
+a completion was voided or a backup restored. A single pass over a ledger this small is
+cheaper than that correctness risk. Voiding a day inside a run splits it, and the record drops
+accordingly — which is the honest answer.
+
+---
+
+## 10.7 The Schedule tab
+
+`schedule.json` is authored data, read at runtime and network-first in the service worker,
+exactly like `config.json`. Nothing about the day is hardcoded.
+
+**"Today" means the app-day.** At 1am on a Tuesday you are still inside Monday's app-day, so
+Monday's blocks are shown — they are the ones you are still living. This is the same boundary
+the rest of the app settles on, and `tests/schedule.test.js` pins it at 01:00, 01:59 and 02:01.
+
+**24+ notation.** A block ending `24:30` is 12:30am the next morning and `25:30` is 1:30am.
+Times are kept as minutes from the labelled day's own midnight, so `24:30` is simply `1470`
+and sorts after `23:00` without special-casing; the absolute instant is resolved through the
+zone, so DST is handled by the same code as everything else.
+
+The tab renders a vertical timeline: past blocks dimmed, the current block raised with an
+accent border and the time left in it, future blocks plain, and a now-line between them. A gap
+between blocks is named rather than left blank — *"Open until 11:30pm — Apply for jobs"*. It
+re-evaluates every 30 seconds while visible, and immediately on focus or visibility change,
+because a tab left open goes stale by doing nothing at all. Days can be stepped through in
+either direction, but the tab always reopens on today.
+
+---
+
 ## 11. UI
 
-Single page, four sections, bottom tab bar (thumb-reachable). Sticky header on every tab shows
-the **settled balance** with today's bonus points beside it — `412 pts (+29 pending)` once an
-anchor has landed, `412 pts (+29 locked — complete an anchor task)` before one has (§6.5) —
-the **streak tier currently being applied**, and available skips.
+Single page, five sections — **Today · Schedule · Failures · Info · History** — with a
+thumb-reachable bottom tab bar. The sticky header on every tab leads with the **tier**, which is the largest element on the
+screen and the main motivational surface: name, current multiplier, and the ladder line
+("1 more day to Blaze", or "Day 12 · 1.60x · +0.02 tomorrow" on the open-ended rung). Each
+rung is tinted from its config colour and escalates in intensity — Cold is flat and unlit,
+Conflagration glows and breathes. A tier-up gets a sub-600ms flash, skipped entirely under
+`prefers-reduced-motion`.
+
+Beneath it sit the **points** (never "balance"), today's pending bonus — `+29 pending` once an
+anchor has landed, `+29 locked` before one has (§6.5) — the streak, available skips, and the
+record standing: "best 18", or "record" when the current run ties it. A broken streak is
+stated, not scolded.
 
 **Today** — the roster for the current weekday, tap to complete.
 - The pending/locked figure sits next to the balance with its caveat in plain words. The anchor
@@ -825,11 +908,11 @@ the **streak tier currently being applied**, and available skips.
 - Weight/tracker taps open a numeric-keypad input for the value.
 - `chore` taps open the pool picker (Clean room / Fold clothes / …).
 
-**Shop** — tiles with cost and affordability judged on the **settled** balance; items reachable
-only with pending points stay disabled but say so (§8.2); cooled-down items visibly disabled
-with remaining time; a blocking note while the balance is negative.
+**Schedule** — see §10.7.
 
-**Info** — see §10.5.
+**Info** — the schedule image, the motivation gallery, and the task reference table, in that
+order. The points explainer was removed in stage 6: the rules belong in the behaviour, not in
+a wall of text nobody re-reads.
 
 **Failure log** — open entries only, **grouped on `(taskId, penalty, actualDeduction)`**:
 matching entries collapse into one row reading `Pray ×4 · −40`, sorted by **`actualDeduction`

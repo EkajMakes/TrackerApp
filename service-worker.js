@@ -18,11 +18,13 @@
  * a stale shell is otherwise served forever, because cache-first never asks.
  * ---------------------------------------------------------------------------
  */
-const CACHE_VERSION = 6;
+const CACHE_VERSION = 10;
 
 const SHELL_CACHE = `tracker-shell-v${CACHE_VERSION}`;
 const CONFIG_CACHE = `tracker-config-v${CACHE_VERSION}`;
-const CONFIG_PATH = 'config.json';
+// Both are authored data the user edits between builds, so both must be
+// fresh on a reload while online and available from cache when not.
+const NETWORK_FIRST = ['config.json', 'schedule.json'];
 
 /** Everything needed for a cold start with no network. */
 const SHELL = [
@@ -31,17 +33,19 @@ const SHELL = [
   './manifest.json',
   './css/style.css',
   './css/stage5.css',
+  './css/stage6.css',
   './js/app.js',
   './js/config.js',
   './js/time.js',
   './js/scoring.js',
   './js/views.js',
+  './js/schedule.js',
   './js/db.js',
   './js/rollover.js',
   './js/ui/dom.js',
   './js/ui/today.js',
-  './js/ui/shop.js',
   './js/ui/failures.js',
+  './js/ui/schedule.js',
   './js/ui/history.js',
   './js/ui/info.js',
   './icons/icon-192.png',
@@ -67,14 +71,14 @@ self.addEventListener('install', (event) => {
       console.warn('shell precache skipped:', err.message);
     }
     try {
-      // config.json is precached too, even though it is network-first at
-      // runtime. The first page load fetches it BEFORE this worker controls
+      // These are precached too, even though they are network-first at
+      // runtime. The first page load fetches them BEFORE this worker controls
       // the page, so without this a user who installs and then goes offline
-      // has an app shell but no economy to boot with.
+      // has an app shell but no economy and no schedule to boot with.
       const cache = await caches.open(CONFIG_CACHE);
-      await cache.add(`./${CONFIG_PATH}`);
+      await Promise.all(NETWORK_FIRST.map((path) => cache.add(`./${path}`).catch(() => {})));
     } catch (err) {
-      console.warn('config precache skipped:', err.message);
+      console.warn('data precache skipped:', err.message);
     }
     await self.skipWaiting();
   })());
@@ -101,7 +105,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return; // nothing off-origin is ours
 
-  if (url.pathname.endsWith(CONFIG_PATH)) {
+  if (NETWORK_FIRST.some((path) => url.pathname.endsWith(path))) {
     event.respondWith(networkFirst(request));
     return;
   }

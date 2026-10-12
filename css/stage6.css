@@ -1,0 +1,227 @@
+/* Tracker — stage 6.
+   Points stopped being currency, so the streak tier takes over as the thing
+   worth looking at. Everything here either serves that, the Schedule tab, or
+   the records that replaced the shop. Loaded after stage5.css. */
+
+:root {
+  --plum: #2d1b3d;
+}
+
+/* ---------- the tier: the headline of the whole app ---------- */
+
+.hdr-tier-block {
+  --tier: var(--dim);
+  position: relative;
+  margin-bottom: 10px;
+  padding: 12px 14px 10px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--tier) 55%, transparent);
+  background:
+    linear-gradient(140deg,
+      color-mix(in srgb, var(--tier) 26%, transparent),
+      color-mix(in srgb, var(--tier) 8%, transparent));
+  overflow: hidden;
+}
+.hdr-tier-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.hdr-tier-name {
+  font-size: 30px; font-weight: 800; line-height: 1.05; letter-spacing: -0.02em;
+  color: color-mix(in srgb, var(--tier) 35%, #ffffff);
+  text-shadow: 0 0 22px color-mix(in srgb, var(--tier) 60%, transparent);
+}
+.hdr-tier-mult {
+  font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--tier) 55%, #ffffff);
+}
+.hdr-tier-progress {
+  margin-top: 4px; font-size: 12.5px; font-weight: 600;
+  color: color-mix(in srgb, var(--tier) 30%, var(--muted));
+}
+
+/* Cold is genuinely inert: no glow, no colour, nothing to admire. */
+.hdr-tier-block.is-cold {
+  border-color: var(--line);
+  background: var(--surface);
+}
+.hdr-tier-block.is-cold .hdr-tier-name { color: var(--dim); text-shadow: none; }
+.hdr-tier-block.is-cold .hdr-tier-mult { color: var(--dim); }
+
+/* The open-ended rung earns the best treatment in the app. */
+.hdr-tier-block.is-beyond {
+  border-color: color-mix(in srgb, var(--tier) 80%, transparent);
+  box-shadow:
+    0 0 26px color-mix(in srgb, var(--tier) 45%, transparent),
+    inset 0 0 40px color-mix(in srgb, var(--tier) 18%, transparent);
+  animation: tierBreathe 3.2s ease-in-out infinite;
+}
+.hdr-tier-block.is-beyond::after {
+  content: '';
+  position: absolute; inset: -40% -10% auto;
+  height: 180%;
+  background: radial-gradient(60% 40% at 50% 0%, color-mix(in srgb, var(--tier) 35%, transparent), transparent 70%);
+  pointer-events: none;
+}
+.hdr-tier-block.is-capped .hdr-tier-mult::after {
+  content: ' max'; font-size: 11px; font-weight: 700; color: var(--muted);
+}
+@keyframes tierBreathe {
+  0%, 100% { box-shadow: 0 0 20px color-mix(in srgb, var(--tier) 35%, transparent),
+                         inset 0 0 36px color-mix(in srgb, var(--tier) 14%, transparent); }
+  50%      { box-shadow: 0 0 34px color-mix(in srgb, var(--tier) 60%, transparent),
+                         inset 0 0 46px color-mix(in srgb, var(--tier) 22%, transparent); }
+}
+
+/* Tier-up: brief, celebratory, gone in under 600ms. */
+.hdr-tier-block.is-tier-up { animation: tierUp 560ms cubic-bezier(0.2, 0.8, 0.3, 1); }
+@keyframes tierUp {
+  0%   { transform: scale(0.96); filter: brightness(1); }
+  35%  { transform: scale(1.03); filter: brightness(1.6); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+.tier-up-flash {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 26px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+  color: #fff; background: color-mix(in srgb, var(--tier) 55%, transparent);
+  animation: tierFlash 560ms ease-out forwards;
+  pointer-events: none;
+}
+@keyframes tierFlash {
+  0%   { opacity: 0; transform: scale(0.9); }
+  25%  { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.1); }
+}
+
+.hdr-record { color: var(--good); font-weight: 700; }
+.hdr-record-gap { color: var(--dim); }
+
+@media (prefers-reduced-motion: reduce) {
+  .hdr-tier-block.is-beyond,
+  .hdr-tier-block.is-tier-up { animation: none; }
+  .tier-up-flash { display: none; }
+}
+
+/* ---------- records ---------- */
+
+.rec-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.rec-card {
+  padding: 12px 10px; text-align: center;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+}
+.rec-card.is-record {
+  border-color: rgba(63, 185, 80, 0.5);
+  background: rgba(63, 185, 80, 0.08);
+}
+.rec-v {
+  font-size: 26px; font-weight: 800; line-height: 1;
+  font-variant-numeric: tabular-nums; color: var(--text);
+}
+.rec-card.is-record .rec-v { color: var(--good); }
+.rec-k {
+  margin-top: 4px; font-size: 11px; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--muted);
+}
+.rec-d { margin-top: 3px; font-size: 11.5px; color: var(--dim); line-height: 1.3; }
+
+/* ---------- schedule ---------- */
+
+.sched-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.sched-step {
+  width: 44px; height: 44px; flex: 0 0 auto;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--text); font-size: 22px; line-height: 1;
+}
+.sched-step:active { background: var(--surface-2); }
+.sched-title { flex: 1; text-align: center; }
+.sched-day { display: block; font-size: 17px; font-weight: 700; }
+.sched-date { display: block; font-size: 12px; color: var(--dim); }
+
+.sched-banner {
+  --cat: var(--accent);
+  padding: 12px 14px; margin-bottom: 14px;
+  border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--surface);
+}
+.sched-banner.is-live {
+  border-color: color-mix(in srgb, var(--cat) 65%, transparent);
+  background: linear-gradient(130deg, color-mix(in srgb, var(--cat) 20%, transparent), var(--surface));
+  box-shadow: 0 0 18px color-mix(in srgb, var(--cat) 25%, transparent);
+}
+.sched-banner-k {
+  font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+}
+.sched-banner-v { margin-top: 3px; font-size: 19px; font-weight: 700; }
+.sched-banner-s { margin-top: 2px; font-size: 13px; color: var(--muted); }
+
+.sched-timeline { position: relative; }
+.sched-block {
+  --cat: var(--dim);
+  display: flex; gap: 12px;
+  padding: 10px 12px 10px 0; margin-bottom: 6px;
+  border-radius: 12px;
+}
+.sched-rail { position: relative; width: 14px; flex: 0 0 14px; display: flex; justify-content: center; }
+.sched-rail::before {
+  content: ''; position: absolute; top: -6px; bottom: -12px; width: 2px;
+  background: var(--line);
+}
+.sched-dot {
+  position: relative; z-index: 1; margin-top: 5px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--cat); box-shadow: 0 0 0 3px var(--bg);
+}
+.sched-body { flex: 1; min-width: 0; }
+.sched-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sched-label { font-size: 16px; font-weight: 600; }
+.sched-meta { margin-top: 2px; display: flex; gap: 10px; font-size: 12.5px; color: var(--muted); }
+.sched-time { font-variant-numeric: tabular-nums; }
+.sched-cat { color: var(--cat); font-weight: 600; }
+.sched-sub { margin-top: 3px; font-size: 12.5px; color: var(--dim); }
+.sched-left { margin-top: 4px; font-size: 12.5px; font-weight: 700; color: var(--cat); }
+
+/* Past is done with: dimmed, struck through the label, out of the way. */
+.sched-block.is-past { opacity: 0.4; }
+.sched-block.is-past .sched-label { color: var(--muted); }
+
+/* The current block is unmistakably the live one. */
+.sched-block.is-current {
+  background: color-mix(in srgb, var(--cat) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--cat) 60%, transparent);
+  padding-left: 10px;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--cat) 22%, transparent);
+}
+.sched-block.is-current .sched-label { font-size: 17px; font-weight: 700; }
+.badge.now {
+  background: var(--cat); color: #0b0b0f; font-weight: 800;
+}
+
+.now-line {
+  position: relative; height: 0; margin: 2px 0 8px 0;
+  border-top: 2px dashed var(--accent);
+}
+.now-line::after {
+  content: 'now';
+  position: absolute; right: 0; top: -9px;
+  padding: 1px 6px; border-radius: 999px;
+  background: var(--accent); color: #07121f;
+  font-size: 10px; font-weight: 800; letter-spacing: 0.04em;
+}
+
+/* ---------- reset: typed confirmation ---------- */
+
+.reset-step {
+  margin: 12px 0 6px; font-size: 11px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted);
+}
+.reset-typed { margin-top: 10px; }
+.reset-input {
+  width: 100%; min-height: var(--tap); margin-top: 8px; padding: 0 14px;
+  font-size: 20px; font-weight: 700; letter-spacing: 0.12em; text-align: center;
+  text-transform: uppercase;
+  background: var(--bg); border: 1px solid rgba(240, 85, 63, 0.5);
+  border-radius: 10px; color: var(--text);
+}
+.danger-zone.is-spent {
+  border-color: var(--line);
+  background: var(--surface);
+}
+.danger-zone.is-spent .prose { color: var(--dim); }

@@ -14,13 +14,14 @@ import {
   exportTracker,
   loadView,
   openTracker,
-  redeemItemAction,
+  readTrackerMeta,
+  resetEverything,
   spendSkipAction,
   undoAction,
   viewOf,
 } from './rollover.js';
-import { renderHeader, renderToday } from './ui/today.js';
-import { renderShop } from './ui/shop.js';
+import { celebrateTierUp, renderHeader, renderToday } from './ui/today.js';
+import { renderSchedule } from './ui/schedule.js';
 import { renderFailures } from './ui/failures.js';
 import { initLightbox, renderInfo } from './ui/info.js';
 import { renderHistory } from './ui/history.js';
@@ -38,7 +39,7 @@ const els = {
   lightbox: document.getElementById('lightbox'),
   views: {
     today: document.getElementById('view-today'),
-    shop: document.getElementById('view-shop'),
+    schedule: document.getElementById('view-schedule'),
     failures: document.getElementById('view-failures'),
     info: document.getElementById('view-info'),
     history: document.getElementById('view-history'),
@@ -48,6 +49,11 @@ const els = {
 let cfg = null;
 let db = null;
 let assets = { sections: { schedule: [], motivation: [] } };
+let scheduleData = null;
+let meta = { resetsUsed: 0 };
+let scheduleOffset = 0;
+let scheduleTimer = null;
+let lastTierName = null;
 let tab = 'today';
 let toastTimer = null;
 
@@ -115,23 +121,25 @@ function askPool(task) {
 }
 
 /**
- * The wipe confirmation. Names what is about to be destroyed, offers the export
- * first, and needs a second deliberate tap on the destructive button — a fat
- * finger on the History tab must not be able to erase a month.
+ * The reset confirmation.
+ *
+ * Gate one is the export, and it must COMPLETE — the typing field does not
+ * appear until the download has actually been written, because "I meant to
+ * back up first" is the regret this whole flow exists to prevent. Gate two is
+ * typing RESET exactly; nothing matches it by accident.
  */
 function confirmReset(summary) {
   return new Promise((resolve) => {
-    els.sheetTitle.textContent = 'Erase everything?';
+    els.sheetTitle.textContent = 'Reset the tracker?';
 
     const facts = document.createElement('div');
     facts.className = 'reset-facts';
-    const lines = [
+    for (const [value, label] of [
       [`${summary.live}`, `completion${summary.live === 1 ? '' : 's'}`],
       [`${summary.failures}`, `failure${summary.failures === 1 ? '' : 's'}`],
       [`${summary.balance}`, 'points'],
       [`${summary.streak}`, 'day streak'],
-    ];
-    for (const [value, label] of lines) {
+    ]) {
       const cell = document.createElement('div');
       cell.className = 'reset-fact';
       const v = document.createElement('span');
@@ -147,49 +155,79 @@ function confirmReset(summary) {
     const range = document.createElement('p');
     range.className = 'prose';
     range.textContent = summary.through
-      ? `Recorded ${summary.since} to ${summary.through}. All of it goes, permanently.`
-      : 'There is nothing recorded yet.';
+      ? `Recorded ${summary.since} to ${summary.through}. This is the only reset you get.`
+      : 'There is nothing recorded yet. This is the only reset you get.';
+
+    const step = document.createElement('p');
+    step.className = 'reset-step';
+    step.textContent = 'Step 1 of 2 — export a backup';
 
     const backup = document.createElement('button');
     backup.className = 'btn';
     backup.type = 'button';
-    backup.textContent = 'Export a backup first';
-    backup.addEventListener('click', () => actions.exportData());
+    backup.textContent = 'Export a backup';
 
+    const typed = document.createElement('div');
+    typed.className = 'reset-typed';
+    typed.hidden = true;
+    const prompt = document.createElement('p');
+    prompt.className = 'prose';
+    prompt.textContent = 'Type RESET to confirm. This cannot be undone.';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'reset-input';
+    input.autocapitalize = 'characters';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.placeholder = 'RESET';
     const erase = document.createElement('button');
     erase.className = 'btn btn-danger';
     erase.type = 'button';
     erase.textContent = 'Erase everything';
-    let armed = false;
+    erase.disabled = true;
+    input.addEventListener('input', () => {
+      erase.disabled = input.value.trim() !== 'RESET';
+    });
     erase.addEventListener('click', () => {
-      if (!armed) {
-        armed = true;
-        erase.textContent = 'Tap again to erase — no undo';
-        erase.classList.add('is-armed');
-        // Disarm if they hesitate, so the second tap is always deliberate.
-        setTimeout(() => {
-          armed = false;
-          erase.textContent = 'Erase everything';
-          erase.classList.remove('is-armed');
-        }, 4000);
-        return;
-      }
+      if (input.value.trim() !== 'RESET') return;
       closeSheet();
       resolve(true);
     });
+    typed.append(prompt, input, erase);
 
-    els.sheetBody.replaceChildren(facts, range, backup, erase);
+    backup.addEventListener('click', async () => {
+      backup.disabled = true;
+      backup.textContent = 'Exporting…';
+      let saved = false;
+      try {
+        saved = await actions.exportData();
+      } catch (err) {
+        toast(`Export failed: ${err.message}`, true);
+      }
+      if (!saved) {
+        // No backup, no wipe. The gate stays shut.
+        backup.disabled = false;
+        backup.textContent = 'Export a backup';
+        return;
+      }
+      backup.textContent = '✓ Backup exported';
+      step.textContent = 'Step 2 of 2 — confirm';
+      typed.hidden = false;
+      input.focus();
+    });
+
+    els.sheetBody.replaceChildren(facts, range, step, backup, typed);
     els.sheet.hidden = false;
     els.sheet._cancel = () => resolve(false);
   });
 }
 
-/* ---------------- rendering ---------------- */
+/* ---------------- rendering ---------------- *//* ---------------- rendering ---------------- */
 
 function paint(view) {
   renderHeader(els.header, view.header);
   if (tab === 'today') renderToday(els.views.today, view, actions);
-  if (tab === 'shop') renderShop(els.views.shop, view, actions);
+  if (tab === 'schedule') renderSchedule(els.views.schedule, view, actions);
   if (tab === 'failures') renderFailures(els.views.failures, view, actions);
   if (tab === 'info') renderInfo(els.views.info, view, actions, assets);
   if (tab === 'history') renderHistory(els.views.history, view, actions);
@@ -199,14 +237,36 @@ function paint(view) {
   els.badge.hidden = open === 0;
 }
 
+const extras = () => ({ schedule: scheduleData, scheduleOffset, meta });
+
 /** Settle and repaint. Called on boot, on tab switch, and after every action. */
 async function refresh() {
-  const { view } = await loadView(db, cfg, now());
+  const { view } = await loadView(db, cfg, now(), extras());
   paint(view);
   return view;
 }
 
+/**
+ * The Schedule tab is the one screen that goes stale just by sitting there,
+ * so it re-evaluates on a timer while visible — and immediately whenever the
+ * app comes back to the foreground, since a backgrounded timer is unreliable.
+ */
+function startScheduleTimer() {
+  stopScheduleTimer();
+  scheduleTimer = setInterval(() => {
+    if (tab === 'schedule' && document.visibilityState === 'visible') refresh();
+  }, 30000);
+}
+
+function stopScheduleTimer() {
+  if (scheduleTimer) clearInterval(scheduleTimer);
+  scheduleTimer = null;
+}
+
 function selectTab(name) {
+  // Browsing other days is a detour, not a destination: the tab always
+  // reopens on today.
+  if (name === 'schedule' && tab !== 'schedule') scheduleOffset = 0;
   tab = name;
   for (const [key, node] of Object.entries(els.views)) node.hidden = key !== name;
   for (const btn of els.tabs.querySelectorAll('.tab')) {
@@ -233,11 +293,23 @@ const actions = {
     const res = await completeTaskAction(db, cfg, now(), entry);
     if (!res.ok) {
       toast(res.reason === 'daily-cap' ? 'Daily cap reached for that one' : `Not recorded: ${res.reason}`, true);
-      return void paint(viewOf(res.world, cfg, now()));
+      return void paint(viewOf(res.world, cfg, now(), extras()));
     }
     const points = res.completion.pointsAwarded;
     toast(points === null ? `${task.label} recorded — settles tonight` : `${task.label} · ${points > 0 ? `+${points}` : '0'} pts`);
-    paint(viewOf(res.world, cfg, now()));
+    const view = viewOf(res.world, cfg, now(), extras());
+    paint(view);
+    // A tier-up earns a moment. The streak only moves at a day close, so this
+    // fires on the first completion of a day that has already raised it.
+    if (lastTierName && view.header.tierName !== lastTierName) {
+      celebrateTierUp(els.header, view.header);
+    }
+    lastTierName = view.header.tierName;
+  },
+
+  scheduleStep(delta) {
+    scheduleOffset = delta === 0 ? 0 : scheduleOffset + delta;
+    refresh();
   },
 
   async undo(undoable) {
@@ -249,12 +321,12 @@ const actions = {
         'already-voided': 'Already undone',
       }[res.reason] ?? `Cannot undo: ${res.reason}`;
       toast(why, true);
-      return void paint(viewOf(res.world, cfg, now()));
+      return void paint(viewOf(res.world, cfg, now(), extras()));
     }
     toast(res.refunded > 0
       ? `${undoable.label} undone · −${res.refunded}`
       : `${undoable.label} undone`);
-    paint(viewOf(res.world, cfg, now()));
+    paint(viewOf(res.world, cfg, now(), extras()));
   },
 
   async spendSkip(group) {
@@ -262,67 +334,101 @@ const actions = {
     const res = await spendSkipAction(db, cfg, now(), failureId);
     if (!res.ok) {
       toast(res.reason === 'no-skips' ? 'No skips available' : `Cannot redeem: ${res.reason}`, true);
-      return void paint(viewOf(res.world, cfg, now()));
+      return void paint(viewOf(res.world, cfg, now(), extras()));
     }
     toast(res.refunded > 0 ? `Skip spent · +${res.refunded} refunded` : 'Skip spent · refunded 0 (the floor had absorbed it)');
-    paint(viewOf(res.world, cfg, now()));
-  },
-
-  async redeem(item) {
-    const res = await redeemItemAction(db, cfg, now(), item.name);
-    if (!res.ok) {
-      toast(`Cannot redeem: ${res.reason.replace('-', ' ')}`, true);
-      return void paint(viewOf(res.world, cfg, now()));
-    }
-    toast(`${item.name} redeemed · −${item.cost}`);
-    paint(viewOf(res.world, cfg, now()));
+    paint(viewOf(res.world, cfg, now(), extras()));
   },
 
   /**
-   * Start over: drop the whole database and re-seed.
+   * The single-use reset — the one named exception to never-delete.
    *
-   * This deletes the DATABASE, not records — there is still no delete path in
-   * db.js, and nothing the app does in normal operation removes a row. The one
-   * destructive act lives here, at the call site, behind a named confirmation.
+   * The allowance lives in the `meta` store, which the wipe recreates and
+   * rewrites by hand: a counter stored inside the erased data would reset
+   * itself, and "single use" would be a lie.
    */
   async resetAll(summary) {
+    if (summary.resetsRemaining <= 0) {
+      toast('The one reset has already been used', true);
+      return;
+    }
     if (!(await confirmReset(summary))) return;
 
-    db.close();
-    await new Promise((resolve, reject) => {
-      const req = indexedDB.deleteDatabase(DB_NAME);
-      req.onsuccess = resolve;
-      req.onerror = () => reject(req.error ?? new Error('the database refused to delete'));
-      // Another tab holding it open would block us; nothing else should.
-      req.onblocked = resolve;
-    });
+    const res = await resetEverything(indexedDB, cfg, now(), { db });
+    if (!res.ok) {
+      toast(res.reason === 'no-resets-left' ? 'The one reset has already been used' : `Reset failed: ${res.reason}`, true);
+      meta = res.meta ?? meta;
+      return void refresh();
+    }
 
-    const opened = await openTracker(indexedDB, cfg, now());
-    db = opened.db;
-    tab = 'today';
+    db = res.db;
+    meta = res.meta;
+    lastTierName = null;
     selectTab('today');
     toast('Everything erased — starting fresh');
   },
 
+  /**
+   * Write the export out.
+   *
+   * Resolves true when a file was genuinely produced, false when the user
+   * backed out of the share sheet. That distinction matters: the reset gate
+   * must only open on a real backup, and a cancelled share is a decision, not
+   * a failure.
+   *
+   * iOS gets the share sheet; everything else gets a download. A share that
+   * fails for any reason OTHER than the user cancelling falls through to the
+   * download rather than leaving the user with no way to back up — which
+   * would make the reset unreachable.
+   */
   async exportData() {
     const dump = await exportTracker(db, cfg, now());
     const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
-    const file = `tracker-export-${new Date(now()).toISOString().slice(0, 10)}.json`;
-    if (navigator.share && navigator.canShare?.({ files: [new File([blob], file)] })) {
-      await navigator.share({ files: [new File([blob], file, { type: 'application/json' })], title: 'Tracker export' });
-      return;
+    const name = `tracker-export-${new Date(now()).toISOString().slice(0, 10)}.json`;
+
+    if (navigator.share && navigator.canShare?.({ files: [new File([blob], name)] })) {
+      try {
+        await navigator.share({
+          files: [new File([blob], name, { type: 'application/json' })],
+          title: 'Tracker export',
+        });
+        toast('Export shared');
+        return true;
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          toast('Export cancelled', true);
+          return false;
+        }
+        // Share is unavailable for some other reason; the download still works.
+      }
     }
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = file;
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
     toast('Export written');
+    return true;
   },
 };
 
 /* ---------------- boot ---------------- */
+
+/**
+ * schedule.json gets the same treatment as config.json: fetched at runtime,
+ * network-first in the service worker, nothing about it hardcoded.
+ */
+async function loadSchedule() {
+  try {
+    const res = await fetch('./schedule.json', { cache: 'no-store' });
+    if (res.ok) return await res.json();
+  } catch {
+    // Offline before it was ever cached.
+  }
+  return null;
+}
 
 /** The image index written by `npm run assets`. Absent is not an error. */
 async function loadAssets() {
@@ -339,9 +445,10 @@ async function loadAssets() {
 
 async function boot() {
   cfg = await loadConfig((...args) => fetch(...args));
-  assets = await loadAssets();
+  [assets, scheduleData] = await Promise.all([loadAssets(), loadSchedule()]);
   const opened = await openTracker(indexedDB, cfg, now());
   db = opened.db;
+  meta = opened.meta ?? meta;
 
   initLightbox(els.lightbox);
 
@@ -355,12 +462,16 @@ async function boot() {
       closeSheet();
     }
   });
-  // Reopening after the app was backgrounded settles any elapsed boundary.
+  // Reopening after the app was backgrounded settles any elapsed boundary —
+  // and re-dates the Schedule tab, whose "now" moved while we were away.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') refresh();
   });
+  window.addEventListener('focus', () => refresh());
+  startScheduleTimer();
 
-  await refresh();
+  const view = await refresh();
+  lastTierName = view.header.tierName;
   els.boot.hidden = true;
   els.app.hidden = false;
 

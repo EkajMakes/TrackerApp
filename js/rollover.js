@@ -12,19 +12,21 @@
  */
 
 import {
+  DB_NAME,
   exportDatabase,
   importDatabase,
   inspectImport,
   loadWorld,
   openDatabase,
   persistWorld,
+  readMeta,
   seedWorld,
+  writeMeta,
 } from './db.js';
 import { buildView } from './views.js';
 import {
   completeTask,
   createWorld,
-  redeemItem,
   rollover as settleForward,
   spendSkip,
   undoCompletion,
@@ -40,7 +42,55 @@ export async function openTracker(factory, cfg, nowMs, options = {}) {
   if (!world) {
     world = await seedWorld(db, createWorld(nowMs, cfg));
   }
-  return { db, world };
+  const meta = await readMeta(db);
+  return { db, world, meta };
+}
+
+/**
+ * The single-use reset: wipe every store and come back as a fresh install.
+ *
+ * The one named exception to never-delete, and narrowly scoped because of it:
+ *
+ *  - `resetsUsed` is read BEFORE the wipe and written back AFTER, into the
+ *    `meta` store of the re-created database. A counter living inside the data
+ *    being erased would reset itself, which would make "single use" a lie;
+ *  - the allowance comes from `config.resetsAllowed`, never hardcoded;
+ *  - callers must have taken an export first — enforced in the UI, since only
+ *    it can know the download actually completed.
+ *
+ * Returns the re-opened database, the fresh world, and the updated meta.
+ */
+export async function resetEverything(factory, cfg, nowMs, options = {}) {
+  const name = options.name ?? DB_NAME;
+  const allowed = cfg.resetsAllowed ?? 0;
+
+  const existing = options.db ?? (await openDatabase(factory, name, options.version));
+  const meta = await readMeta(existing);
+  if (meta.resetsUsed >= allowed) {
+    return { ok: false, reason: 'no-resets-left', meta };
+  }
+  existing.close();
+
+  await new Promise((resolve, reject) => {
+    const req = factory.deleteDatabase(name);
+    req.onsuccess = resolve;
+    req.onerror = () => reject(req.error ?? new Error('the database refused to delete'));
+    req.onblocked = resolve;
+  });
+
+  const db = await openDatabase(factory, name, options.version);
+  const world = await seedWorld(db, createWorld(nowMs, cfg));
+  // Carried across the wipe by hand — this is the whole mechanism.
+  const nextMeta = await writeMeta(db, {
+    resetsUsed: meta.resetsUsed + 1,
+    lastResetAt: nowMs,
+  });
+
+  return { ok: true, db, world, meta: nextMeta };
+}
+
+export function readTrackerMeta(db) {
+  return readMeta(db);
 }
 
 /**
@@ -94,24 +144,20 @@ export function undoAction(db, cfg, nowMs, completionId) {
   return withRollover(db, cfg, nowMs, (world) => undoCompletion(world, completionId, nowMs, cfg));
 }
 
-export function redeemItemAction(db, cfg, nowMs, itemName) {
-  return withRollover(db, cfg, nowMs, (world) => redeemItem(world, itemName, nowMs, cfg));
-}
-
 /**
  * Settle, then hand back the view model every screen renders from.
  *
  * This is the only entry point the ui/ modules use to read: they never touch
  * db.js directly and never derive anything themselves.
  */
-export async function loadView(db, cfg, nowMs) {
+export async function loadView(db, cfg, nowMs, extras = {}) {
   const { world } = await runRollover(db, cfg, nowMs);
-  return { world, view: buildView(world, nowMs, cfg) };
+  return { world, view: buildView(world, nowMs, cfg, extras) };
 }
 
 /** The view for a world already in hand — used after an action settles. */
-export function viewOf(world, cfg, nowMs) {
-  return buildView(world, nowMs, cfg);
+export function viewOf(world, cfg, nowMs, extras = {}) {
+  return buildView(world, nowMs, cfg, extras);
 }
 
 /** Full JSON export, read straight from the stores. */

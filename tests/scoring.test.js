@@ -325,15 +325,16 @@ test('the multiplier uses the day-start tier and is never applied retroactively'
   }
 
   const paid = w.completions.filter((x) => x.taskId === 'jobs').map((x) => x.pointsAwarded);
-  // Streak at each day's start: 0,1,2,3,4 → tier 1.0 until the 4th day, then 1.05.
-  assert.deepEqual(paid, [15, 15, 15, 16, 16]);
+  // Streak at each day's START: 0,1,2,3,4 → Cold, Spark, Embers, Blaze, Burning
+  // → 1.00, 1.05, 1.10, 1.15, 1.20 against 15 points.
+  assert.deepEqual(paid, [15, 16, 17, 17, 18]);
   assert.equal(w.state.currentStreak, 5);
-  assert.equal(tierFor(w.state.currentStreak, c).name, 'Cooking');
+  assert.equal(tierFor(w.state.currentStreak, c).name, 'Inferno');
 
   // Reaching a tier does not repay yesterday: earlier awards keep their value.
   assert.equal(w.completions[0].multiplierApplied, 1);
-  assert.equal(w.completions[3].multiplierApplied, 1.05);
-  assert.equal(award(15, tierFor(10, c)), 18);
+  assert.equal(w.completions[1].multiplierApplied, 1.05);
+  assert.equal(award(15, tierFor(7, c)), 23);
 });
 
 test('a day with no anchor completion resets the streak', () => {

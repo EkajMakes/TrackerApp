@@ -1,5 +1,5 @@
 {
-  "_comment": "Habit gamification economy config. Tune these values weekly. Rule: penalty always equals points for quota and daily tasks.",
+  "_comment": "Habit tracker economy. Points are a score, not currency — there is no shop. The streak ladder is the reward. Rule: penalty always equals points for quota and daily tasks.",
 
   "dayBoundary": { "hour": 2, "timezone": "America/Chicago" },
   "weekStart": "monday",
@@ -10,6 +10,7 @@
   "skipsPerWeek": 5,
   "skipsRollOver": false,
   "undosPerDay": 3,
+  "resetsAllowed": 1,
 
   "tasks": {
     "class": {
@@ -41,9 +42,9 @@
       "extraEarnsPoints": true
     },
     "certs": {
-      "label": "Study for Certifications",
-      "type": "daily",
-      "dailyTarget": 1,
+      "label": "Study for CCNA",
+      "type": "quota",
+      "target": 5,
       "points": 12,
       "penalty": 12,
       "days": "all",
@@ -81,7 +82,7 @@
     "stream": {
       "label": "Stream",
       "type": "target",
-      "target": 4,
+      "target": 3,
       "points": 20,
       "targetBonus": 40,
       "days": "all",
@@ -90,8 +91,7 @@
         "mon": "early",
         "tue": "prime",
         "thu": "early",
-        "sat": "early",
-        "sun": "early"
+        "fri": "early"
       }
     },
     "study": {
@@ -151,20 +151,19 @@
   "streak": {
     "rule": "consecutive days with at least one anchor task completed",
     "tiers": [
-      { "at": 3, "name": "Flowing", "multiplier": 1.05 },
-      { "at": 5, "name": "Cooking", "multiplier": 1.10 },
-      { "at": 10, "name": "Burning", "multiplier": 1.20 }
-    ]
-  },
-
-  "shop": [
-    { "name": "Takis", "cost": 60, "cooldownDays": 1 },
-    { "name": "Medium Coke or Sprite", "cost": 80, "cooldownDays": 2 },
-    { "name": "Gooning", "cost": 100, "cooldownDays": 2 },
-    { "name": "McChicken", "cost": 120, "cooldownDays": 3 },
-    { "name": "Hour of Laziness", "cost": 150, "cooldownDays": 2 },
-    { "name": "Big Mac", "cost": 200, "cooldownDays": 4 },
-    { "name": "Skip Token", "cost": 250 },
-    { "name": "Movie", "cost": 300, "cooldownDays": 7 }
-  ]
+      { "at": 0, "name": "Cold",         "multiplier": 1.00, "color": "#6b7280" },
+      { "at": 1, "name": "Spark",        "multiplier": 1.05, "color": "#fbbf24" },
+      { "at": 2, "name": "Embers",       "multiplier": 1.10, "color": "#f59e0b" },
+      { "at": 3, "name": "Blaze",        "multiplier": 1.15, "color": "#f97316" },
+      { "at": 4, "name": "Burning",      "multiplier": 1.20, "color": "#ea580c" },
+      { "at": 5, "name": "Inferno",      "multiplier": 1.30, "color": "#dc2626" },
+      { "at": 6, "name": "Primal Burn",  "multiplier": 1.40, "color": "#b91c1c" },
+      { "at": 7, "name": "Conflagration","multiplier": 1.50, "color": "#7c3aed" }
+    ],
+    "beyondTopTier": {
+      "perDay": 0.02,
+      "max": 2.50,
+      "label": "Conflagration"
+    }
+  }
 }

@@ -86,15 +86,57 @@ function weekCard(week) {
   return card;
 }
 
+function recordCard(label, value, detail, tone) {
+  const card = el('div', `rec-card${tone ? ` ${tone}` : ''}`);
+  card.append(el('div', 'rec-v', value));
+  card.append(el('div', 'rec-k', label));
+  if (detail) card.append(el('div', 'rec-d', detail));
+  return card;
+}
+
 export function renderHistory(root, view, actions) {
   clear(root);
   const { history } = view;
+  const r = history.records;
+
+  /* --- records: the ratchet that replaced spending --------------------- */
+  root.append(el('h2', 'sec', 'Records'));
+  const grid = el('div', 'rec-grid');
+  grid.append(recordCard(
+    'Longest streak',
+    `${r.longestStreak.days}d`,
+    r.longestStreak.tierName
+      ? `reached ${r.longestStreak.tierName}${r.longestStreak.endLabel ? ` · ended ${r.longestStreak.endLabel}` : ''}`
+      : 'no streak yet',
+    r.isRecordNow ? 'is-record' : null,
+  ));
+  grid.append(recordCard(
+    `Longest ${r.longestTopTierRun.label ?? 'top tier'}`,
+    `${r.longestTopTierRun.days}d`,
+    `consecutive days at ${r.longestTopTierRun.threshold}+`,
+  ));
+  grid.append(recordCard(
+    'Best week',
+    r.bestWeek ? `${r.bestWeek.net > 0 ? '+' : ''}${r.bestWeek.net}` : '—',
+    r.bestWeek ? `week of ${r.bestWeek.label}` : 'no full week yet',
+  ));
+  grid.append(recordCard(
+    'Current streak',
+    `${r.current}d`,
+    r.isRecordNow && r.current > 0
+      ? 'at your record'
+      : r.behindRecordBy > 0
+        ? `${r.behindRecordBy} short of best`
+        : 'start one today',
+    r.isRecordNow && r.current > 0 ? 'is-record' : null,
+  ));
+  root.append(grid);
 
   /* --- running balance ------------------------------------------------- */
-  root.append(el('h2', 'sec', 'Running balance'));
+  root.append(el('h2', 'sec', 'Points over time'));
   const balCard = el('div', 'card');
   const balHead = el('div', 'card-head');
-  balHead.append(el('div', 'card-title', `${history.balance.current} pts`));
+  balHead.append(el('div', 'card-title', `${history.balance.current} points`));
   balHead.append(el('div', 'card-net', `floor ${history.balance.floor}`));
   balCard.append(balHead);
   if (history.balance.points.length > 1) {
@@ -136,21 +178,6 @@ export function renderHistory(root, view, actions) {
   if (!history.weeks.length) root.append(empty('No completions recorded yet.'));
   for (const week of history.weeks) root.append(weekCard(week));
 
-  /* --- redemptions ----------------------------------------------------- */
-  if (history.redemptions.length) {
-    root.append(el('h2', 'sec', 'Redemptions'));
-    const card = el('div', 'card');
-    for (const r of history.redemptions) {
-      const kv = el('div', 'kv');
-      kv.append(el('span', null, r.label));
-      const v = el('b', null, `−${r.cost}`);
-      v.classList.add('neg');
-      kv.append(v);
-      card.append(kv);
-    }
-    root.append(card);
-  }
-
   /* --- resolved failures: retained, never deleted ----------------------- */
   if (history.resolvedFailures.length) {
     root.append(el('h2', 'sec', 'Resolved failures'));
@@ -169,19 +196,28 @@ export function renderHistory(root, view, actions) {
   btn.addEventListener('click', () => actions.exportData());
   root.append(btn);
 
-  /* --- start fresh ------------------------------------------------------ *
-   * Deliberately last, deliberately styled apart, and deliberately guarded
-   * behind a confirmation that names what is about to go. This is the one
-   * destructive control in the app. */
-  root.append(el('h2', 'sec', 'Start fresh'));
+  /* --- the single-use reset ------------------------------------------- *
+   * The one named exception to never-delete. Everything about it is built
+   * to make that exception stay singular: a typed confirmation, a forced
+   * export, and a counter in the `meta` store that the wipe preserves. */
+  root.append(el('h2', 'sec', 'Danger'));
   const danger = el('div', 'danger-zone');
-  danger.append(el('p', 'prose',
-    'Erases every completion, failure, redemption and skip on this device and starts the '
-    + 'tracker over at zero. Meant for clearing out test data before you begin for real. '
-    + 'Export first if there is anything here you want to keep — this cannot be undone.'));
-  const reset = el('button', 'btn btn-danger', 'Erase everything and start over');
-  reset.type = 'button';
-  reset.addEventListener('click', () => actions.resetAll(history.reset));
-  danger.append(reset);
+
+  if (history.reset.resetsRemaining <= 0) {
+    danger.classList.add('is-spent');
+    danger.append(el('p', 'prose',
+      history.reset.resetsUsed > 0
+        ? `The one reset has been used${history.reset.lastResetLabel ? ` on ${history.reset.lastResetLabel}` : ''}. There are no more.`
+        : 'No resets are configured for this app.'));
+  } else {
+    danger.append(el('p', 'prose',
+      `Erases every record on this device and starts over as a fresh install. You get `
+      + `${history.reset.resetsRemaining} of these for the life of the app — once it is used it `
+      + `cannot come back. An export is taken first and must finish before the wipe is offered.`));
+    const reset = el('button', 'btn btn-danger', 'Reset the tracker');
+    reset.type = 'button';
+    reset.addEventListener('click', () => actions.resetAll(history.reset));
+    danger.append(reset);
+  }
   root.append(danger);
 }

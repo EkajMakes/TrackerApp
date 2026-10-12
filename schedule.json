@@ -1,0 +1,113 @@
+{
+  "_comment": "Daily time blocks for the Schedule tab. Times are wall-clock HH:MM; hours past midnight use 24+ (24:30 = 12:30am). Edit freely — the app reads this at runtime.",
+  "categories": {
+    "fixed":   { "label": "Class",        "color": "#6b5dd3" },
+    "gym":     { "label": "Gym",          "color": "#d97b28" },
+    "school":  { "label": "Coursework",   "color": "#1d8a80" },
+    "cert":    { "label": "CCNA",         "color": "#c9483a" },
+    "content": { "label": "Content",      "color": "#c23b7e" },
+    "career":  { "label": "Jobs",         "color": "#4a8f3c" },
+    "life":    { "label": "Life",         "color": "#9aa3b2" }
+  },
+  "days": {
+    "mon": [
+      ["07:30","08:00","Wake · weigh-in · pray","life",""],
+      ["08:00","09:30","Gym","gym",""],
+      ["09:30","10:15","Shower · breakfast","life",""],
+      ["10:15","12:15","Coursework","school",""],
+      ["12:15","13:00","Lunch","life",""],
+      ["13:00","15:00","CCNA study","cert","Theory + notes"],
+      ["15:00","15:15","Break","life",""],
+      ["15:15","18:00","Coursework","school",""],
+      ["18:30","19:00","Drive to campus","life",""],
+      ["19:00","21:45","MKT-4360","fixed","JSOM 1.117"],
+      ["23:30","24:30","Apply for jobs","career",""],
+      ["24:30","25:30","Wind down","life",""]
+    ],
+    "tue": [
+      ["07:30","08:00","Wake · weigh-in · pray","life",""],
+      ["08:00","09:30","Gym","gym",""],
+      ["09:30","10:15","Shower · breakfast","life",""],
+      ["10:15","12:15","CCNA study","cert","Theory + notes"],
+      ["12:15","13:00","Lunch","life",""],
+      ["13:00","16:00","Coursework","school",""],
+      ["16:00","17:30","Job outreach · follow-ups","career","Daytime = replies"],
+      ["17:30","18:00","Dinner","life",""],
+      ["18:00","19:00","Stream prep · post clip","content",""],
+      ["19:00","21:00","Stream — prime night","content","Twitch + TikTok"],
+      ["21:15","22:45","Edit video","content",""],
+      ["23:30","24:30","Apply for jobs","career",""],
+      ["24:30","25:30","Wind down","life",""]
+    ],
+    "wed": [
+      ["07:30","08:00","Wake · weigh-in · pray","life",""],
+      ["08:00","09:30","Gym","gym",""],
+      ["09:30","10:15","Shower · breakfast","life",""],
+      ["10:15","12:00","Coursework","school",""],
+      ["12:00","13:00","Lunch · drive","life",""],
+      ["13:00","15:45","ITSS-4370","fixed","JSOM 22.102"],
+      ["15:45","16:15","Drive home","life",""],
+      ["16:15","18:15","CCNA labs","cert","Packet Tracer"],
+      ["18:15","19:30","Dinner","life",""],
+      ["19:30","21:30","Coursework","school",""],
+      ["23:30","24:30","Apply for jobs","career",""],
+      ["24:30","25:30","Wind down","life",""]
+    ],
+    "thu": [
+      ["07:30","08:00","Wake · weigh-in · pray","life",""],
+      ["08:00","09:30","Gym","gym",""],
+      ["09:30","10:15","Shower · breakfast","life",""],
+      ["10:15","12:15","Coursework","school",""],
+      ["12:15","13:00","Lunch","life",""],
+      ["13:00","15:00","CCNA study","cert","Theory + notes"],
+      ["15:00","16:00","Break · stream setup","life",""],
+      ["16:00","18:00","Stream — early","content","Twitch + TikTok"],
+      ["18:00","18:30","Dinner","life",""],
+      ["18:30","19:00","Drive to campus","life",""],
+      ["19:00","21:45","ITSS-4382","fixed","JSOM 1.107"],
+      ["22:00","23:30","Edit video","content",""],
+      ["23:30","24:30","Apply for jobs","career",""],
+      ["24:30","25:30","Wind down","life",""]
+    ],
+    "fri": [
+      ["07:30","08:00","Wake · weigh-in · pray","life",""],
+      ["08:00","09:30","Gym","gym",""],
+      ["09:30","10:15","Shower · breakfast","life",""],
+      ["10:15","12:00","Coursework","school",""],
+      ["12:00","13:00","Lunch · drive","life",""],
+      ["13:00","15:45","ITSS-4395 Capstone","fixed","JSOM 22.106"],
+      ["15:45","16:00","Drive home","life",""],
+      ["16:00","18:00","Flex · catch-up","school","Whatever slipped"],
+      ["18:00","19:00","Dinner","life",""],
+      ["19:00","21:00","Stream","content","Twitch + TikTok"],
+      ["21:15","22:45","Edit video","content",""],
+      ["23:30","24:30","Apply for jobs","career",""],
+      ["24:30","25:30","Wind down","life",""]
+    ],
+    "sat": [
+      ["07:30","08:00","Wake · weigh-in · pray","life",""],
+      ["08:00","09:30","Gym","gym",""],
+      ["09:30","10:15","Shower · breakfast","life",""],
+      ["10:15","14:30","Deep coursework","school","Capstone + NOS"],
+      ["14:30","15:30","Lunch · break","life",""],
+      ["15:30","18:30","Batch edit · stockpile","content","Week of videos"],
+      ["18:30","19:30","Dinner","life",""],
+      ["19:30","21:30","Business side","career","With Luke"],
+      ["23:30","24:30","Apply for jobs","career",""],
+      ["24:30","25:30","Wind down","life",""]
+    ],
+    "sun": [
+      ["07:30","08:00","Wake · weigh-in · pray","life",""],
+      ["08:00","09:30","Gym","gym",""],
+      ["09:30","10:15","Shower · breakfast","life",""],
+      ["10:15","13:15","Coursework","school",""],
+      ["13:15","14:30","Lunch · break","life",""],
+      ["14:30","16:30","Stockpile content","content",""],
+      ["16:30","18:00","CCNA labs","cert","Packet Tracer"],
+      ["18:00","19:30","Dinner · reset","life",""],
+      ["19:30","20:00","Weekly planning","life",""],
+      ["20:00","21:30","Apply for jobs","career",""],
+      ["21:30","23:30","Wind down · early night","life","Lights out 11:30"]
+    ]
+  }
+}

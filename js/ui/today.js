@@ -12,13 +12,30 @@ import { clear, el, empty, signed } from './dom.js';
 export function renderHeader(root, header) {
   clear(root);
 
-  const row = el('div', 'hdr-row');
-  const balance = el('span', 'hdr-balance', header.balance);
-  if (header.negative) balance.classList.add('is-negative');
-  row.append(balance, el('span', 'hdr-unit', 'pts'));
+  /* The tier is the headline. It is the thing this app is for: the number
+     that only moves when the streak does. Points sit beneath it. */
+  const tierWrap = el('div', `hdr-tier-block tier-${header.tierSlug}`);
+  if (header.tierColor) tierWrap.style.setProperty('--tier', header.tierColor);
+  if (header.beyond) tierWrap.classList.add('is-beyond');
+  if (header.atCap) tierWrap.classList.add('is-capped');
+  if (header.streak === 0) tierWrap.classList.add('is-cold');
 
-  // Gate-aware: a locked day says so instead of advertising points that
-  // settlement is guaranteed to award as 0.
+  const name = el('div', 'hdr-tier-name', header.tierName);
+  const mult = el('div', 'hdr-tier-mult', `${header.multiplier.toFixed(2)}x`);
+  const top = el('div', 'hdr-tier-top');
+  top.append(name, mult);
+  tierWrap.append(top);
+
+  const ladder = el('div', 'hdr-tier-progress', header.progress.text);
+  tierWrap.append(ladder);
+  root.append(tierWrap);
+
+  /* Points — a score now, never a balance. */
+  const row = el('div', 'hdr-row');
+  const points = el('span', 'hdr-balance', header.balance);
+  if (header.negative) points.classList.add('is-negative');
+  row.append(points, el('span', 'hdr-unit', 'points'));
+
   const { pending, locked, count } = header.pending;
   if (count > 0) {
     const tag = el('span', 'hdr-pending', locked ? `+${pending} locked` : `+${pending} pending`);
@@ -28,18 +45,13 @@ export function renderHeader(root, header) {
   root.append(row);
 
   const sub = el('div', 'hdr-sub');
-  // The tier is the main motivational surface: each one looks distinctly
-  // hotter than the last, and "no tier" reads as unlit rather than broken.
-  const tierClass = header.tierName ? `tier-${header.tierName.toLowerCase()}` : 'tier-none';
-  const tier = el('span', `hdr-tier ${tierClass}`);
-  tier.append(el('span', 'hdr-tier-flame', header.tierName ? '◆' : '◇'));
-  tier.append(el('span', null, header.tierName ? `${header.tierName} ${header.multiplier}x` : 'No tier'));
-  sub.append(tier);
   sub.append(el('span', 'hdr-streak', `${header.streak}-day streak`));
   sub.append(el('span', null, `${header.skipsAvailable} skip${header.skipsAvailable === 1 ? '' : 's'}`));
-  if (header.nextTier) {
-    sub.append(el('span', 'hdr-next',
-      `${header.nextTier.daysAway}d → ${header.nextTier.name}`));
+  if (header.isRecordNow && header.streak > 0) {
+    sub.append(el('span', 'hdr-record', 'record'));
+  } else if (header.recordStreak > 0) {
+    // The fact, and the record it fell short of. No scolding.
+    sub.append(el('span', 'hdr-record-gap', `best ${header.recordStreak}`));
   }
   root.append(sub);
 
@@ -51,6 +63,22 @@ export function renderHeader(root, header) {
   if (header.atFloor) {
     root.append(el('div', 'hdr-note', `At the floor (${header.floor}). Penalties can’t take more.`));
   }
+}
+
+/**
+ * A tier-up deserves a moment. Called by app.js when a completion raises the
+ * tier, kept under 600ms, and skipped entirely under prefers-reduced-motion.
+ */
+export function celebrateTierUp(root, header) {
+  if (globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
+  const block = root.querySelector('.hdr-tier-block');
+  if (!block) return;
+  block.classList.remove('is-tier-up');
+  void block.offsetWidth;
+  block.classList.add('is-tier-up');
+  const flash = el('div', 'tier-up-flash', header.tierName);
+  block.append(flash);
+  setTimeout(() => flash.remove(), 600);
 }
 
 /* ---------------- today ---------------- */
